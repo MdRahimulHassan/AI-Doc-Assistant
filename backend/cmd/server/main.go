@@ -2,32 +2,90 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/config"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/database"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/router"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("fatal: %v", err)
+	}
+}
+
+// run holds the real logic. Returning an error (instead of calling
+// log.Fatal deep inside) lets deferred cleanup like pool.Close() always run.
+func run() error {
+	// 1. Config
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("invalid configuration:\n%v", err)
+		return fmt.Errorf("invalid configuration:\n%w", err)
 	}
 
-	ctx := context.Background()
-
-	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	// 2. Database
+	pool, err := database.NewPool(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("database connection failed: %v", err)
+		return fmt.Errorf("database connection: %w", err)
 	}
-	defer pool.Close()
+	defer pool.Close() // runs LAST, after the server has drained
 	log.Println("database connected")
 
+	// 3. Migrations
 	if err := database.RunMigrations(cfg.DatabaseURL); err != nil {
-		log.Fatalf("migrations failed: %v", err)
+		return fmt.Errorf("migrations: %w", err)
 	}
 	log.Println("migrations applied")
 
-	log.Printf("config loaded: port=%s cors=%v jwt_ttl=%s",
-		cfg.Port, cfg.CORSOrigins, cfg.JWTLifetime)
+	// 4. Router and server
+	r := router.New(router.Deps{DB: pool})
+
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	// 5. Listen for Ctrl+C / SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 6. Run the server in a goroutine so main can wait for a signal
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("server listening on :%s", cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+
+	// 7. Block until the server fails or a signal arrives
+	select {
+	case err := <-serverErr:
+		return fmt.Errorf("server error: %w", err)
+	case <-ctx.Done():
+		log.Println("shutdown signal received")
+	}
+
+	// A second Ctrl+C now force-kills instead of being swallowed.
+	stop()
+
+	// 8. Graceful shutdown: stop accepting, let in-flight requests finish
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful shutdown failed: %w", err)
+	}
+
+	log.Println("server stopped cleanly")
+	return nil
 }
