@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/pkg/response"
 )
 
 // Pinger is the only thing the health check needs from the database.
@@ -31,14 +32,12 @@ func (h *HealthHandler) Check(c *gin.Context) {
 	if err := h.db.Ping(ctx); err != nil {
 		// Log the detail server-side; don't expose it to callers.
 		log.Printf("health check: database ping failed: %v", err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":   "unavailable",
-			"database": "down",
-		})
+		
+		response.Error(c, http.StatusServiceUnavailable, response.CodeUnavailable, "database unavailable")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response.OK(c, gin.H{
 		"status":   "ok",
 		"database": "up",
 	})
