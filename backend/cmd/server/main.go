@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,10 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	if err := run(); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
@@ -46,7 +51,9 @@ func run() error {
 	log.Println("migrations applied")
 
 	// 4. Router and server
-	r := router.New(router.Deps{DB: pool})
+		r := router.New(router.Deps{
+			DB: pool, 
+			CORSOrigins: cfg.CORSOrigins})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,

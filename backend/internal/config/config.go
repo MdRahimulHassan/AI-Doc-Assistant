@@ -43,6 +43,15 @@ func Load() (*Config, error) {
 	// --- CORS ---
 	cfg.CORSOrigins = splitCSV(getEnv("CORS_ORIGINS", "http://localhost:5173"))
 
+	if len(cfg.CORSOrigins) == 0 {
+		errs = append(errs, errors.New("CORS_ORIGINS must contain at least one origin"))
+	}
+	for _, o := range cfg.CORSOrigins {
+		if o == "*" {
+			errs = append(errs, errors.New(`CORS_ORIGINS must not contain "*": list explicit origins`))
+		}
+	}
+
 	// --- JWT secret (required, minimum length) ---
 	cfg.JWTSecret = os.Getenv("JWT_SECRET")
 	switch {
