@@ -10,6 +10,7 @@ import (
 // Machine-readable error codes. The React app branches on these,
 // never on the human-readable message. Add new ones here as features appear.
 const (
+	CodeBadRequest         = "BAD_REQUEST"
 	CodeValidation         = "VALIDATION_ERROR"
 	CodeUnauthorized       = "UNAUTHORIZED"
 	CodeInvalidCredentials = "INVALID_CREDENTIALS"
@@ -31,6 +32,13 @@ type ErrorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Details any    `json:"details,omitempty"` // e.g. per-field validation errors
+}
+
+// FieldError describes one invalid input field. It goes in the "details"
+// of a VALIDATION_ERROR so the React form can highlight the right input.
+type FieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
 }
 
 // OK sends 200 with the data wrapped in the envelope.

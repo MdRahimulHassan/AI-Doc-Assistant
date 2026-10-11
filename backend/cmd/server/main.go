@@ -15,6 +15,8 @@ import (
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/config"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/database"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/router"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/repository"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
 )
 
 func main() {
@@ -51,9 +53,24 @@ func run() error {
 	log.Println("migrations applied")
 
 	// 4. Router and server
-		r := router.New(router.Deps{
-			DB: pool, 
-			CORSOrigins: cfg.CORSOrigins})
+	users := repository.NewUserRepository(pool)
+
+	tokens, err := service.NewTokenManager(cfg.JWTSecret, cfg.JWTLifetime)
+	if err != nil {
+		return fmt.Errorf("token manager: %w", err)
+	}
+
+	authService, err := service.NewAuthService(users, tokens, service.DefaultBcryptCost)
+	if err != nil {
+		return fmt.Errorf("auth service: %w", err)
+	}
+
+	r := router.New(router.Deps{
+		DB:          pool,
+		Auth:        authService,
+		Tokens:      tokens,
+		CORSOrigins: cfg.CORSOrigins,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
