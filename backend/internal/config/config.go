@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"path/filepath"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -22,6 +24,11 @@ type Config struct {
 	JWTSecret   string
 	JWTLifetime time.Duration
 	CORSOrigins []string
+
+	// Documents (Week 2)
+	UploadDir      string // absolute path
+	MaxUploadBytes int64
+	IngestWorkers  int
 }
 
 // Load reads configuration from the environment (and a .env file if present).
@@ -95,6 +102,19 @@ func Load() (*Config, error) {
 		}
 	}
 
+		// --- Uploads and ingestion ---
+	uploadDir := getEnv("UPLOAD_DIR", "./storage/uploads")
+	absDir, err := filepath.Abs(uploadDir)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("UPLOAD_DIR %q is invalid: %w", uploadDir, err))
+	}
+	cfg.UploadDir = absDir
+
+	maxMB := getInt("MAX_UPLOAD_MB", 10, 1, 100, &errs)
+	cfg.MaxUploadBytes = int64(maxMB) << 20 // MB -> bytes
+
+	cfg.IngestWorkers = getInt("INGEST_WORKERS", 2, 1, 32, &errs)
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -116,6 +136,25 @@ func required(key string, errs *[]error) string {
 		*errs = append(*errs, fmt.Errorf("%s is required", key))
 	}
 	return v
+}
+
+// getInt reads an integer variable. Unset means the default. A value that
+// isn't a whole number, or falls outside [lo, hi], is recorded as an error.
+func getInt(key string, def, lo, hi int, errs *[]error) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s must be a whole number, got %q", key, raw))
+		return def
+	}
+	if n < lo || n > hi {
+		*errs = append(*errs, fmt.Errorf("%s must be between %d and %d, got %d", key, lo, hi, n))
+		return def
+	}
+	return n
 }
 
 // splitCSV turns "a, b,,c" into ["a", "b", "c"].

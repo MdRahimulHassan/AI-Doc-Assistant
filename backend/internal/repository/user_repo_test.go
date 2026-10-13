@@ -37,7 +37,7 @@ func setup(t *testing.T) (*UserRepository, *pgxpool.Pool) {
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(context.Background(), "TRUNCATE users"); err != nil {
+	if _, err := pool.Exec(context.Background(), "TRUNCATE users CASCADE"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return NewUserRepository(pool), pool
