@@ -17,6 +17,7 @@ import (
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/router"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/repository"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/storage"
 )
 
 func main() {
@@ -51,6 +52,18 @@ func run() error {
 		return fmt.Errorf("migrations: %w", err)
 	}
 	log.Println("migrations applied")
+
+	files, err := storage.NewLocal(cfg.UploadDir)
+	if err != nil {
+		return fmt.Errorf("file storage: %w", err)
+	}
+	// Safe at startup: nothing is being uploaded yet.
+	if n, err := files.CleanTemp(time.Hour); err != nil {
+		slog.Warn("temp upload cleanup failed", "error", err)
+	} else if n > 0 {
+		slog.Info("removed stale temp uploads", "count", n)
+	}
+	log.Printf("upload directory ready: %s", cfg.UploadDir)
 
 	// 4. Router and server
 	users := repository.NewUserRepository(pool)

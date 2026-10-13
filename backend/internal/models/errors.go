@@ -7,4 +7,9 @@ import "errors"
 var (
 	ErrNotFound   = errors.New("not found")
 	ErrEmailTaken = errors.New("email already registered")
+
+	// File storage
+	ErrFileTooLarge = errors.New("file too large")
+	ErrFileNotFound = errors.New("file not found")
+	ErrInvalidPath  = errors.New("invalid storage path")
 )
