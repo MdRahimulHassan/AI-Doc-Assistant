@@ -1,0 +1,4 @@
+Bengali Language Test - বাংলা ভাষার পরীক্ষা
+The quick brown fox jumps over the lazy dog.
+আর্টিফিশিয়াল ইন্টেলিজেন্স বা কৃত্রিম বুদ্ধিমত্তা আমাদের জীবনকে সহজ করে তুলেছে।
+Accented test: café, résumé.

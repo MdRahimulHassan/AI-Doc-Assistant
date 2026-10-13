@@ -1,0 +1,12 @@
+Sample Document for Parser Tests
+
+The zebrafish is a small freshwater fish widely used in biology laboratories. Its embryos are transparent, which lets researchers watch organs develop in real time.
+
+Information retrieval systems rank documents by how well they match a query. Classic methods such as BM25 score each document using term frequency and document length.
+
+Accented letters should survive extraction: café, naïve, résumé.
+
+Pipeline stages:
+- Parsing
+- Chunking
+- Indexing
