@@ -70,3 +70,17 @@ func TestError(t *testing.T) {
 		t.Error("Error must abort the handler chain")
 	}
 }
+
+func TestAcceptedAndNoContent(t *testing.T) {
+	c, w := newCtx()
+	Accepted(c, gin.H{"x": 1})
+	if w.Code != http.StatusAccepted || decode(t, w)["success"] != true {
+		t.Errorf("Accepted: status %d, body %s", w.Code, w.Body.String())
+	}
+
+	c2, w2 := newCtx()
+	NoContent(c2)
+	if w2.Code != http.StatusNoContent || w2.Body.Len() != 0 {
+		t.Errorf("NoContent: status %d, body %q", w2.Code, w2.Body.String())
+	}
+}

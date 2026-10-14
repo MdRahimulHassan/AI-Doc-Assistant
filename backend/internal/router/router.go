@@ -11,16 +11,22 @@ import (
 )
 
 type Deps struct {
-	DB          handler.Pinger
-	Auth        handler.Authenticator
-	Tokens      middleware.TokenParser
-	CORSOrigins []string
+	DB             handler.Pinger
+	Auth           handler.Authenticator
+	Documents      handler.Documents
+	Tokens         middleware.TokenParser
+	CORSOrigins    []string
+	MaxUploadBytes int64
 }
 
 func New(d Deps) *gin.Engine {
 	r := gin.New()
 	r.HandleMethodNotAllowed = true
 	_ = r.SetTrustedProxies(nil)
+
+	// Gin keeps up to 32 MiB of a multipart upload in RAM by default. With 1 MiB,
+	// bigger files spill to temporary files on disk instead.
+	r.MaxMultipartMemory = 1 << 20
 
 	r.Use(
 		middleware.RequestID(),
@@ -41,6 +47,7 @@ func New(d Deps) *gin.Engine {
 	// --- Routes ---
 	health := handler.NewHealthHandler(d.DB)
 	authH := handler.NewAuthHandler(d.Auth)
+	docsH := handler.NewDocumentHandler(d.Documents, d.MaxUploadBytes)
 
 	r.GET("/health", health.Check)
 
@@ -55,7 +62,11 @@ func New(d Deps) *gin.Engine {
 	protected := api.Group("")
 	protected.Use(middleware.Auth(d.Tokens))
 	protected.GET("/me", authH.Me)
-	// Week 2's document routes will be added to `protected` as well.
+
+	protected.POST("/documents", docsH.Upload)
+	protected.GET("/documents", docsH.List)
+	protected.GET("/documents/:id", docsH.Get)
+	protected.DELETE("/documents/:id", docsH.Delete)
 
 	return r
 }

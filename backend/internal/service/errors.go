@@ -12,6 +12,12 @@ var (
 	ErrInvalidToken = errors.New("invalid or expired token")
 )
 
+var (
+	ErrEmptyFile           = errors.New("uploaded file is empty")
+	ErrUnsupportedFileType = errors.New("unsupported file type")
+	ErrBusy                = errors.New("ingestion is busy")
+)
+
 // ValidationError says which input field was wrong and why. The handler
 // will turn it into response.ErrorWithDetails, so the React form can
 // highlight the right input.

@@ -19,6 +19,9 @@ const (
 	CodeMethodNotAllowed   = "METHOD_NOT_ALLOWED"
 	CodeInternal           = "INTERNAL_ERROR"
 	CodeUnavailable        = "SERVICE_UNAVAILABLE"
+	CodeFileTooLarge        = "FILE_TOO_LARGE"
+	CodeUnsupportedFileType = "UNSUPPORTED_FILE_TYPE"
+	CodeNoFile              = "NO_FILE"
 )
 
 // Envelope is the one JSON shape every endpoint returns.
@@ -46,9 +49,18 @@ func OK(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, Envelope{Success: true, Data: data})
 }
 
+func Accepted(c *gin.Context, data any) {
+	c.JSON(http.StatusAccepted, Envelope{Success: true, Data: data})
+}
+
 // Created sends 201 with the data wrapped in the envelope.
 func Created(c *gin.Context, data any) {
 	c.JSON(http.StatusCreated, Envelope{Success: true, Data: data})
+}
+
+func NoContent(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+	c.Writer.WriteHeaderNow()
 }
 
 // Error sends an error envelope and stops the handler chain.

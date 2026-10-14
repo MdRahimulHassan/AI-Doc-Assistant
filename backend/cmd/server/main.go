@@ -19,6 +19,7 @@ import (
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/storage"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/parser"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/chunker"
 )
 
 func main() {
@@ -85,11 +86,19 @@ func run() error {
 		return fmt.Errorf("auth service: %w", err)
 	}
 
+	// Documents. Ingestion runs inline (inside the upload request) for now;
+	// Step 8 replaces the inline ingester with a bounded background worker pool.
+	docRepo := repository.NewDocumentRepository(pool)
+	ingestSvc := service.NewIngestService(docRepo, files, chunker.Default(), service.DefaultIngestTimeout)
+	docService := service.NewDocumentService(docRepo, files, service.NewInlineIngester(ingestSvc), cfg.MaxUploadBytes)
+
 	r := router.New(router.Deps{
-		DB:          pool,
-		Auth:        authService,
-		Tokens:      tokens,
-		CORSOrigins: cfg.CORSOrigins,
+		DB:             pool,
+		Auth:           authService,
+		Documents:      docService,
+		Tokens:         tokens,
+		CORSOrigins:    cfg.CORSOrigins,
+		MaxUploadBytes: cfg.MaxUploadBytes,
 	})
 
 	srv := &http.Server{
