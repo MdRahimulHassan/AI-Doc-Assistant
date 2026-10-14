@@ -13,6 +13,7 @@ import (
 
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/database"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/models"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/testutil"
 )
 
 // setup connects to the TEST database, applies migrations, and empties the table.
@@ -36,6 +37,8 @@ func setup(t *testing.T) (*UserRepository, *pgxpool.Pool) {
 		t.Fatalf("pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
+
+	testutil.LockDatabase(t, url)
 
 	if _, err := pool.Exec(context.Background(), "TRUNCATE users CASCADE"); err != nil {
 		t.Fatalf("truncate: %v", err)
