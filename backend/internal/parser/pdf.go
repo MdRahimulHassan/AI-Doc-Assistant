@@ -6,15 +6,16 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/ledongthuc/pdf"
 )
 
 // PDF extracts text from PDFs that have a text layer. Scanned (image-only)
 // PDFs yield no text, so they end as ErrNoText. OCR is out of scope.
-type PDF struct{}
+type PDFGo struct{}
 
-func (PDF) Parse(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
+func (PDFGo) Parse(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
 	reader, err := pdf.NewReader(r, size)
 	if err != nil {
 		return "", fmt.Errorf("%w: pdf: %v", ErrCorrupt, err)
@@ -49,7 +50,12 @@ func (PDF) Parse(ctx context.Context, r io.ReaderAt, size int64) (string, error)
 	if pages > 0 && failed == pages {
 		return "", fmt.Errorf("%w: pdf: none of the %d pages could be read", ErrCorrupt, pages)
 	}
-	return sb.String(), nil
+	text := sb.String()
+	if looksGlued(text) {
+		return "", fmt.Errorf("%w: pdf: the text has almost no spaces between words; "+
+			"this PDF needs poppler's pdftotext", ErrUnreliableText)
+	}
+	return text, nil
 }
 
 // pdfPageText extracts one page. A fresh font map per page avoids mixing up
@@ -79,4 +85,21 @@ func pdfPageText(reader *pdf.Reader, n int) (text string, err error) {
 	// The library's line breaks are unreliable (some PDFs come out one word per
 	// line), so flatten each page into a single paragraph.
 	return strings.Join(strings.Fields(text), " "), nil
+}
+
+func looksGlued(text string) bool {
+	var letters, spaces int
+	for _, r := range text {
+		switch {
+		case unicode.IsSpace(r):
+			spaces++
+		case unicode.IsLetter(r) && r < 0x250:
+			// Latin letters only. CJK and other scripts are not judged by
+			// this rule: Chinese legitimately has no spaces.
+			letters++
+		}
+	}
+	// English averages about one space per 5-6 letters. Fewer than one per 20
+	// means the words are fused. Short samples are not judged.
+	return letters >= 500 && spaces*20 < letters
 }

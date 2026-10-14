@@ -32,10 +32,27 @@ type typeInfo struct {
 
 // The single source of truth for supported types.
 var types = map[string]typeInfo{
-	MimePDF:  {ext: "pdf", parser: guarded{inner: PDF{}}},
+	MimePDF:  {ext: "pdf", parser: guarded{inner: defaultPDF()}},
 	MimeDOCX: {ext: "docx", parser: guarded{inner: DOCX{}}},
 	MimeTXT:  {ext: "txt", parser: guarded{inner: TXT{}}},
 }
+
+// pdfBackend records which PDF extractor defaultPDF picked.
+var pdfBackend = "go"
+
+// defaultPDF prefers poppler's pdftotext (much better extraction) and falls
+// back to the pure-Go library when it isn't installed. It runs once, when the
+// package is initialized.
+func defaultPDF() Parser {
+	if p, ok := NewPoppler(); ok {
+		pdfBackend = "poppler"
+		return p
+	}
+	return PDFGo{}
+}
+
+// PDFBackend reports the active PDF extractor: "poppler" or "go".
+func PDFBackend() string { return pdfBackend }
 
 func lookup(contentType string) (typeInfo, bool) {
 	// Tolerates "text/plain; charset=utf-8" and different letter case.

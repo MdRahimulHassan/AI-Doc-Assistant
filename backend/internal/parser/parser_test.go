@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -150,7 +151,6 @@ func TestParse_BadFiles(t *testing.T) {
 		want     error
 		optional bool
 	}{
-		{"truncated pdf", "corrupt.pdf", MimePDF, ErrCorrupt, false},
 		{"binary junk as txt", "binary.txt", MimeTXT, ErrInvalidText, false},
 		{"plain text renamed docx", "not-a-zip.docx", MimeDOCX, ErrCorrupt, false},
 		{"zip without word/document.xml", "no-document-xml.docx", MimeDOCX, ErrCorrupt, false},
@@ -175,21 +175,39 @@ func TestParse_BadFiles(t *testing.T) {
 	}
 }
 
-func TestParse_TruncatedFilesNeverPanic(t *testing.T) {
-	for _, tc := range []struct{ file, mime string }{
-		{"sample.pdf", MimePDF},
-		{"sample.docx", MimeDOCX},
-	} {
-		f, size := openFixture(t, tc.file, false)
-		data := make([]byte, size)
-		if _, err := f.ReadAt(data, 0); err != nil && err != io.EOF {
+func TestParse_TruncatedFilesNeverCrash(t *testing.T) {
+	tests := []struct {
+		file     string
+		mime     string
+		mustFail bool
+	}{
+		{"sample.docx", MimeDOCX, true}, // a ZIP without its central directory is unreadable
+		{"sample.pdf", MimePDF, false},  // poppler may recover what it can from a damaged PDF
+		{"corrupt.pdf", MimePDF, false},
+	}
+
+	for _, tc := range tests {
+		data, err := os.ReadFile(filepath.Join("testdata", tc.file))
+		if err != nil {
 			t.Fatal(err)
 		}
 
 		for _, frac := range []float64{0.1, 0.5, 0.9} {
 			cut := int(float64(len(data)) * frac)
-			if _, err := parseBytes(t, tc.mime, data[:cut]); err == nil {
-				t.Errorf("%s truncated to %d%% parsed without an error", tc.file, int(frac*100))
+			text, err := parseBytes(t, tc.mime, data[:cut])
+
+			switch {
+			case err == nil:
+				if tc.mustFail {
+					t.Errorf("%s truncated to %d%% parsed without an error", tc.file, int(frac*100))
+				}
+				if text == "" {
+					t.Errorf("%s at %d%%: success with empty text", tc.file, int(frac*100))
+				}
+			case errors.Is(err, ErrCorrupt), errors.Is(err, ErrNoText):
+				// a classified failure is fine
+			default:
+				t.Errorf("%s at %d%%: unclassified error: %v", tc.file, int(frac*100), err)
 			}
 		}
 	}
@@ -376,18 +394,110 @@ func TestForTypeAndExtension(t *testing.T) {
 	}
 }
 
-func TestPDF_WordsStayInOneParagraph(t *testing.T) {
+func TestPDF_ReadableText(t *testing.T) {
 	f, size := openFixture(t, "sample.pdf", false)
 
 	text, err := parserFor(t, MimePDF).Parse(context.Background(), f, size)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, "small freshwater fish") {
-		t.Errorf("words are not separated by single spaces: %q", text)
+
+	flat := strings.Join(strings.Fields(text), " ") // newlines may fall anywhere in a phrase
+	if !strings.Contains(flat, "small freshwater fish") {
+		t.Errorf("words are not separated by spaces: %q", text)
 	}
-	// sample.pdf is a single page, so there should be no paragraph breaks at all.
-	if n := strings.Count(text, "\n\n"); n > 3 {
-		t.Errorf("found %d paragraph breaks in a one-page document: words are being split into paragraphs", n)
+
+	// One word per paragraph (the old bug) would give an average of 1.
+	paragraphs := strings.Split(text, "\n\n")
+	words := len(strings.Fields(text))
+	if avg := words / len(paragraphs); avg < 4 {
+		t.Errorf("%d paragraphs for %d words (average %d): words are being split apart", len(paragraphs), words, avg)
 	}
+}
+
+// Tests the Go fallback directly (so it stays covered even when poppler is
+// installed) and poppler when it is available.
+func TestPDFBackends(t *testing.T) {
+	backends := map[string]Parser{"go": guarded{inner: PDFGo{}}}
+	if p, ok := NewPoppler(); ok {
+		backends["poppler"] = guarded{inner: p}
+	} else {
+		t.Log("pdftotext is not installed: only the Go fallback is tested")
+	}
+
+	for name, p := range backends {
+		t.Run(name, func(t *testing.T) {
+			f, size := openFixture(t, "sample.pdf", false)
+			text, err := p.Parse(context.Background(), f, size)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			flat := squash(text)
+			for _, m := range []string{"zebrafish", "transparent", "BM25", "Indexing"} {
+				if !strings.Contains(flat, m) {
+					t.Errorf("output is missing %q", m)
+				}
+			}
+
+			// Non-PDF and empty input must be classified, never crash.
+			for _, in := range [][]byte{nil, []byte("not a pdf"), make([]byte, 100)} {
+				_, err := p.Parse(context.Background(), bytes.NewReader(in), int64(len(in)))
+				if !errors.Is(err, ErrCorrupt) && !errors.Is(err, ErrNoText) {
+					t.Errorf("input %q: err = %v, want ErrCorrupt or ErrNoText", in, err)
+				}
+			}
+		})
+	}
+}
+
+// Reproduces the bug found on a real LaTeX paper: word gaps encoded only as
+// position adjustments, with no space characters at all.
+func TestPoppler_WordsSeparatedOnlyByKerning(t *testing.T) {
+	p, ok := NewPoppler()
+	if !ok {
+		t.Skip("pdftotext is not installed")
+	}
+
+	data := minimalPDF(t,
+		"BT /F1 12 Tf 72 700 Td [(The)-250(zebrafish)-250(is)-250(small)] TJ ET\n"+
+			"BT /F1 12 Tf 72 680 Td [(Second)-250(line)] TJ ET\n")
+
+	text, err := guarded{inner: p}.Parse(context.Background(), bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	flat := strings.Join(strings.Fields(text), " ")
+	if !strings.Contains(flat, "The zebrafish is small") || !strings.Contains(flat, "Second line") {
+		t.Errorf("words were glued together: %q", text)
+	}
+}
+
+// minimalPDF builds a valid one-page PDF whose content stream is the given
+// text, drawn in the standard Helvetica font.
+func minimalPDF(t *testing.T, content string) []byte {
+	t.Helper()
+
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, body := range objects {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, body)
+	}
+
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return b.Bytes()
 }

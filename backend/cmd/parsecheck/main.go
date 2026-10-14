@@ -32,6 +32,9 @@ func run() int {
 		return 2
 	}
 	p, _ := parser.ForType(mimeType)
+	if mimeType == parser.MimePDF {
+		fmt.Printf("PDF extractor: %s\n", parser.PDFBackend())
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -63,6 +66,8 @@ func run() int {
 			kind = "ErrInvalidText"
 		case errors.Is(err, parser.ErrTextTooLarge):
 			kind = "ErrTextTooLarge"
+		case errors.Is(err, parser.ErrUnreliableText):
+			kind = "ErrUnreliableText"
 		}
 		fmt.Printf("FAILED (%s) after %v\n  %v\n", kind, took, err)
 		return 1

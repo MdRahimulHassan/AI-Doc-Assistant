@@ -18,6 +18,7 @@ import (
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/repository"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/storage"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/parser"
 )
 
 func main() {
@@ -64,6 +65,12 @@ func run() error {
 		slog.Info("removed stale temp uploads", "count", n)
 	}
 	log.Printf("upload directory ready: %s", cfg.UploadDir)
+	
+	if parser.PDFBackend() == "go" {
+		slog.Warn("pdftotext not found: using the built-in PDF extractor, which can glue words together on some PDFs (install poppler)")
+	} else {
+		slog.Info("pdf extractor ready", "backend", parser.PDFBackend())
+	}
 
 	// 4. Router and server
 	users := repository.NewUserRepository(pool)

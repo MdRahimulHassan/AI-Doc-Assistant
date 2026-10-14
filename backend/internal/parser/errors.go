@@ -9,4 +9,5 @@ var (
 	ErrTextTooLarge = errors.New("document text is too large")
 	ErrCorrupt      = errors.New("file is corrupt or not a valid document")
 	ErrInvalidText  = errors.New("file is not valid UTF-8 text")
+	ErrUnreliableText = errors.New("text could not be extracted reliably")
 )
