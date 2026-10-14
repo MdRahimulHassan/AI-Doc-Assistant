@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/parser"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/chunker"
 )
 
 func main() { os.Exit(run()) }
@@ -74,5 +75,14 @@ func run() int {
 		runes = runes[:1500]
 	}
 	fmt.Println(string(runes))
+	chunks := chunker.Default().Chunk(text)
+	minW, maxW, sum := 1<<30, 0, 0
+	for _, ch := range chunks {
+		n := len(strings.Fields(ch))
+		sum += n
+		minW = min(minW, n)
+		maxW = max(maxW, n)
+	}
+	fmt.Printf("\n%d chunks: %d to %d words each (average %d)\n", len(chunks), minW, maxW, sum/len(chunks))
 	return 0
 }
