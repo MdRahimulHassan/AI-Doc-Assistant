@@ -80,6 +80,12 @@ func run() error {
 		slog.Info("pdf extractor ready", "backend", parser.PDFBackend())
 	}
 
+	if cfg.LLMEnabled() {
+		slog.Info("AI features enabled", "model", cfg.GroqModel, "summary_model", cfg.GroqSummaryModel, "tpm_budget", cfg.GroqTPMBudget)
+	} else {
+		slog.Warn("GROQ_API_KEY is not set: the AI features (ask, summarize) are disabled")
+	}
+
 	// 5. Services
 	users := repository.NewUserRepository(pool)
 	tokens, err := service.NewTokenManager(cfg.JWTSecret, cfg.JWTLifetime)
