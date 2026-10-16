@@ -18,15 +18,24 @@ import (
 var migrationsFS embed.FS
 
 // RunMigrations applies all pending "up" migrations.
-func RunMigrations(databaseURL string) error {
+// newMigrator opens a migrator on the embedded SQL files. The caller closes it.
+func newMigrator(databaseURL string) (*migrate.Migrate, error) {
 	src, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
-		return fmt.Errorf("load embedded migrations: %w", err)
+		return nil, fmt.Errorf("load embedded migrations: %w", err)
 	}
-
 	m, err := migrate.NewWithSourceInstance("iofs", src, toMigrateURL(databaseURL))
 	if err != nil {
-		return fmt.Errorf("init migrator: %w", err)
+		return nil, fmt.Errorf("init migrator: %w", err)
+	}
+	return m, nil
+}
+
+// RunMigrations applies all pending "up" migrations.
+func RunMigrations(databaseURL string) error {
+	m, err := newMigrator(databaseURL)
+	if err != nil {
+		return err
 	}
 	defer m.Close()
 
