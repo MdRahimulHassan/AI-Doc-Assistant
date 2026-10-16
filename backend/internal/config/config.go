@@ -29,6 +29,7 @@ type Config struct {
 	UploadDir      string // absolute path
 	MaxUploadBytes int64
 	IngestWorkers  int
+	IngestQueueSize int
 }
 
 // Load reads configuration from the environment (and a .env file if present).
@@ -114,6 +115,7 @@ func Load() (*Config, error) {
 	cfg.MaxUploadBytes = int64(maxMB) << 20 // MB -> bytes
 
 	cfg.IngestWorkers = getInt("INGEST_WORKERS", 2, 1, 32, &errs)
+	cfg.IngestQueueSize = getInt("INGEST_QUEUE_SIZE", 100, 1, 10000, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

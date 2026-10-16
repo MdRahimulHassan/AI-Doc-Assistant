@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -260,5 +261,70 @@ func TestIngest_DeletedDocumentIsANoOp(t *testing.T) {
 	}
 	if err := e.svc.Ingest(ctx, doc.ID); err != nil {
 		t.Errorf("Ingest of a deleted document should be a quiet no-op, got %v", err)
+	}
+}
+
+func (e *env) waitSettled(t *testing.T, id uuid.UUID) *models.Document {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		doc := e.get(t, id)
+		if doc.Status != models.StatusProcessing {
+			return doc
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("document %s is still processing after 30s", id)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// What a crash leaves behind is a stored file and a row marked 'processing'.
+// At the next start the document must be found and processed again.
+func TestRecovery_DocumentsLeftProcessingAreIngestedAgain(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+
+	// Two uploads whose ingestion never ran...
+	a := e.upload(t, "sample.txt", parser.MimeTXT)
+	b := e.upload(t, "sample.docx", parser.MimeDOCX)
+
+	// ...and one finished document, which recovery must leave alone.
+	done := e.upload(t, "sample.txt", parser.MimeTXT)
+	if err := e.svc.Ingest(ctx, done.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := e.docs.ListProcessing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		found[id] = true
+	}
+	if len(ids) != 2 || !found[a.ID] || !found[b.ID] || found[done.ID] {
+		t.Fatalf("ListProcessing = %v, want exactly the two unfinished documents", ids)
+	}
+
+	queue, err := service.NewIngestQueue(ctx, e.svc, 2, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue.Start()
+	t.Cleanup(func() { _ = queue.Shutdown(10 * time.Second) })
+
+	if n := queue.EnqueueAll(ctx, ids); n != 2 {
+		t.Fatalf("EnqueueAll queued %d, want 2", n)
+	}
+
+	for _, id := range []uuid.UUID{a.ID, b.ID} {
+		got := e.waitSettled(t, id)
+		if got.Status != models.StatusReady || got.ChunkCount < 1 {
+			t.Errorf("document %s after recovery: status %q, chunks %d", id, got.Status, got.ChunkCount)
+		}
+	}
+	if rest, err := e.docs.ListProcessing(ctx); err != nil || len(rest) != 0 {
+		t.Errorf("ListProcessing after recovery = (%v, %v), want empty", rest, err)
 	}
 }

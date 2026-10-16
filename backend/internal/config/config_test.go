@@ -60,6 +60,9 @@ func TestLoad_UploadDefaults(t *testing.T) {
 	if !filepath.IsAbs(cfg.UploadDir) {
 		t.Errorf("UploadDir = %q, want an absolute path", cfg.UploadDir)
 	}
+	if cfg.IngestQueueSize != 100 {
+		t.Errorf("IngestQueueSize = %d, want 100", cfg.IngestQueueSize)
+	}
 }
 
 func TestLoad_UploadCustomValues(t *testing.T) {
@@ -88,6 +91,8 @@ func TestLoad_InvalidNumbers(t *testing.T) {
 		{"negative upload size", "MAX_UPLOAD_MB", "-5"},
 		{"absurd upload size", "MAX_UPLOAD_MB", "100000"},
 		{"upload size not a number", "MAX_UPLOAD_MB", "ten"},
+		{"zero queue size", "INGEST_QUEUE_SIZE", "0"},
+		{"absurd queue size", "INGEST_QUEUE_SIZE", "100000"},
 	}
 
 	for _, tc := range tests {

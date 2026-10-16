@@ -150,6 +150,36 @@ func (r *DocumentRepository) GetForIngest(ctx context.Context, id uuid.UUID) (*m
 	return doc, nil
 }
 
+// ListProcessing returns the IDs of documents still marked 'processing',
+// oldest first. At startup these are documents whose ingestion was
+// interrupted (a crash, or queued jobs left behind at shutdown). It has no
+// user filter: it is a system method, like GetForIngest.
+func (r *DocumentRepository) ListProcessing(ctx context.Context) ([]uuid.UUID, error) {
+	const q = `
+		SELECT id FROM documents
+		WHERE status = $1
+		ORDER BY created_at ASC, id ASC`
+
+	rows, err := r.pool.Query(ctx, q, string(models.StatusProcessing))
+	if err != nil {
+		return nil, fmt.Errorf("list processing documents: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan document id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list processing documents: %w", err)
+	}
+	return ids, nil
+}
+
 // MarkFailed records a failure. The message must be a short, safe, fixed
 // string chosen by the caller, never a raw err.Error().
 func (r *DocumentRepository) MarkFailed(ctx context.Context, id uuid.UUID, safeMessage string) error {

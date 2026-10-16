@@ -29,6 +29,7 @@ type fakeIngestRepo struct {
 	completed  [][]string
 	failedMsgs []string
 	markCtxErr error // ctx.Err() as seen inside MarkFailed
+	completePanics bool // makes CompleteIngestion panic
 }
 
 func (r *fakeIngestRepo) GetForIngest(_ context.Context, id uuid.UUID) (*models.Document, error) {
@@ -47,6 +48,9 @@ func (r *fakeIngestRepo) GetForIngest(_ context.Context, id uuid.UUID) (*models.
 func (r *fakeIngestRepo) CompleteIngestion(_ context.Context, _ uuid.UUID, chunks []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.completePanics {
+		panic("database driver bug")
+	}
 	r.completed = append(r.completed, chunks)
 	return r.completeErr
 }
@@ -374,4 +378,15 @@ func TestMessagesAreShortAndSafe(t *testing.T) {
 			t.Errorf("message should be one sentence ending in a period: %q", msg)
 		}
 	}
+}
+
+func TestIngest_PanicAnywhereIsContainedAndMarksTheDocumentFailed(t *testing.T) {
+	h := newIngestHarness(t)
+	h.repo.completePanics = true // happens OUTSIDE process(), which has its own recover
+
+	err := h.svc.Ingest(context.Background(), h.doc.ID)
+	if !errors.Is(err, errPanic) {
+		t.Errorf("err = %v, want it to wrap errPanic", err)
+	}
+	assertOneFailure2(t, h, msgGeneric)
 }

@@ -88,8 +88,19 @@ func NewIngestService(docs IngestRepository, files FileStorage, chunker TextChun
 // Ingest records the outcome itself and has already logged any failure. The
 // returned error is for callers that want to react (tests, metrics): do not
 // log it again, and never show it to a user.
-func (s *IngestService) Ingest(parent context.Context, docID uuid.UUID) error {
+func (s *IngestService) Ingest(parent context.Context, docID uuid.UUID) (err error) {
+	// Last line of defense: a panic ANYWHERE in here (not only in process,
+	// which has its own recover) becomes a failed document, not a dead worker.
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("ingest panic", "document_id", docID, "panic", rec, "stack", string(debug.Stack()))
+			s.failAfterPanic(parent, docID)
+			err = fmt.Errorf("ingest %s: %w: %v", docID, errPanic, rec)
+		}
+	}()
+
 	start := time.Now()
+	// ...the rest of the function stays exactly as it is
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 
@@ -226,5 +237,18 @@ func classify(err error) failure {
 		return failure{msgTimeout, false}
 	default:
 		return failure{msgGeneric, false}
+	}
+}
+// failAfterPanic records a generic failure for a document whose ingestion
+// panicked. During shutdown the document is left alone for startup recovery.
+func (s *IngestService) failAfterPanic(parent context.Context, docID uuid.UUID) {
+	if parent.Err() != nil {
+		return
+	}
+	wctx, cancel := context.WithTimeout(parent, failureWriteTimeout)
+	defer cancel()
+
+	if err := s.docs.MarkFailed(wctx, docID, msgGeneric); err != nil && !errors.Is(err, models.ErrNotFound) {
+		slog.Error("could not record the failure after a panic", "document_id", docID, "error", err)
 	}
 }

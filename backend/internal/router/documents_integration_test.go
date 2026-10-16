@@ -38,7 +38,9 @@ type stack struct {
 	bob     string
 }
 
-func newStack(t *testing.T, maxUpload int64) *stack {
+func newStack(t *testing.T, maxUpload int64) *stack { return newStackWith(t, maxUpload, 50, true) }
+
+func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers bool) *stack {
 	t.Helper()
 
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -94,8 +96,20 @@ func newStack(t *testing.T, maxUpload int64) *stack {
 	}
 	docRepo := repository.NewDocumentRepository(pool)
 	ingest := service.NewIngestService(docRepo, files, chunker.Default(), service.DefaultIngestTimeout)
-	docs := service.NewDocumentService(docRepo, files, service.NewInlineIngester(ingest), maxUpload)
 
+	// A real queue with real workers. Cleanups run in reverse order, and this one
+	// is registered last, so it runs FIRST: running jobs finish before the
+	// database lock is released and the pool is closed.
+	queue, err := service.NewIngestQueue(context.Background(), ingest, 2, queueCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startWorkers {
+		queue.Start()
+	}
+	t.Cleanup(func() { _ = queue.Shutdown(10 * time.Second) })
+
+	docs := service.NewDocumentService(docRepo, files, queue, maxUpload)
 	return &stack{
 		handler: router.New(router.Deps{
 			DB: pool, Auth: authSvc, Documents: docs, Tokens: tokens,
@@ -111,6 +125,7 @@ func newStack(t *testing.T, maxUpload int64) *stack {
 type result struct {
 	Code    int
 	Body    string
+	Header  http.Header
 	Data    json.RawMessage
 	ErrCode string
 }
@@ -127,7 +142,7 @@ func (s *stack) do(t *testing.T, method, path, token string, body io.Reader, cty
 	w := httptest.NewRecorder()
 	s.handler.ServeHTTP(w, req)
 
-	res := result{Code: w.Code, Body: w.Body.String()}
+	res := result{Code: w.Code, Body: w.Body.String(), Header: w.Header()}
 	if w.Body.Len() > 0 {
 		var env struct {
 			Data  json.RawMessage `json:"data"`
@@ -181,6 +196,26 @@ func decodeDoc(t *testing.T, res result) docJSON {
 		t.Fatalf("decode document: %v\n%s", err, res.Body)
 	}
 	return d.Document
+}
+
+// waitSettled polls GET /api/documents/:id until the document leaves "processing".
+func (s *stack) waitSettled(t *testing.T, token, id string) docJSON {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		res := s.do(t, http.MethodGet, "/api/documents/"+id, token, nil, "")
+		if res.Code != http.StatusOK {
+			t.Fatalf("get %s: status %d: %s", id, res.Code, res.Body)
+		}
+		doc := decodeDoc(t, res)
+		if doc.Status != "processing" {
+			return doc
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("document %s is still processing after 30s", id)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func fixture(t *testing.T, name string) []byte {
@@ -240,8 +275,8 @@ func TestDocumentsAPI_UploadIngestSearchDelete(t *testing.T) {
 				t.Errorf("created document = %+v", doc)
 			}
 
-			// Ingestion ran inline, so the document is already ready.
-			got := decodeDoc(t, s.do(t, http.MethodGet, "/api/documents/"+doc.ID, s.alice, nil, ""))
+			// Ingestion runs in the background: wait for it to finish.
+			got := s.waitSettled(t, s.alice, doc.ID)
 			if got.Status != "ready" || got.ChunkCount < 1 || got.ErrorMessage != nil {
 				t.Fatalf("after ingestion: %+v", got)
 			}
@@ -426,5 +461,39 @@ func TestDocumentsAPI_ListPaging(t *testing.T) {
 	}
 	if got := count("?offset=10"); got != 0 {
 		t.Errorf("offset past the end: %d documents, want 0", got)
+	}
+}
+
+func TestDocumentsAPI_FullQueueReturns503AndCleansUp(t *testing.T) {
+	// A queue with room for ONE job whose workers never start: nothing drains it.
+	s := newStackWith(t, 10<<20, 1, false)
+
+	first := s.upload(t, s.alice, "sample.txt", fixture(t, "sample.txt"))
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first upload: status %d: %s", first.Code, first.Body)
+	}
+
+	second := s.upload(t, s.alice, "sample.txt", fixture(t, "sample.txt"))
+	if second.Code != http.StatusServiceUnavailable || second.ErrCode != "SERVICE_UNAVAILABLE" {
+		t.Fatalf("second upload: status %d, code %q: %s", second.Code, second.ErrCode, second.Body)
+	}
+	if second.Header.Get("Retry-After") == "" {
+		t.Error("the 503 should carry a Retry-After header")
+	}
+
+	// The refused upload was rolled back completely: one row and one file, both
+	// belonging to the first upload.
+	if n := s.count(t, `SELECT count(*) FROM documents`); n != 1 {
+		t.Errorf("%d documents stored, want 1", n)
+	}
+	if files := filesUnder(t, s.uploads); len(files) != 1 {
+		t.Errorf("files on disk: %v, want exactly one", files)
+	}
+
+	// The first document is simply waiting: no worker has picked it up.
+	doc := decodeDoc(t, first)
+	got := decodeDoc(t, s.do(t, http.MethodGet, "/api/documents/"+doc.ID, s.alice, nil, ""))
+	if got.Status != "processing" {
+		t.Errorf("status = %q, want processing", got.Status)
 	}
 }

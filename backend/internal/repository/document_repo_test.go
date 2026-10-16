@@ -418,3 +418,51 @@ func TestDocument_StatusConstantsMatchDatabase(t *testing.T) {
 		t.Error("database accepted an invalid status")
 	}
 }
+
+func TestDocument_ListProcessing(t *testing.T) {
+	users, docs, pool := setupDocs(t)
+	ctx := context.Background()
+	alice := mustUser(t, users, "alice@example.com")
+	bob := mustUser(t, users, "bob@example.com")
+
+	oldest := mustDoc(t, docs, alice.ID, "oldest.pdf")
+	ready := mustDoc(t, docs, bob.ID, "ready.pdf")
+	failed := mustDoc(t, docs, alice.ID, "failed.pdf")
+	newest := mustDoc(t, docs, bob.ID, "newest.pdf")
+
+	if err := docs.CompleteIngestion(ctx, ready.ID, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.MarkFailed(ctx, failed.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicit timestamps, so the order never depends on how fast the test runs.
+	base := time.Now().Add(-time.Hour)
+	for i, d := range []*models.Document{oldest, ready, failed, newest} {
+		if _, err := pool.Exec(ctx, `UPDATE documents SET created_at = $1 WHERE id = $2`,
+			base.Add(time.Duration(i)*time.Minute), d.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Both users' unfinished documents, oldest first; finished and failed ones excluded.
+	got, err := docs.ListProcessing(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []uuid.UUID{oldest.ID, newest.ID}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListProcessing = %v, want %v", got, want)
+	}
+
+	// Once everything is finished the result is empty, and not nil.
+	for _, id := range []uuid.UUID{oldest.ID, newest.ID} {
+		if err := docs.CompleteIngestion(ctx, id, []string{"x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err = docs.ListProcessing(ctx)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Errorf("ListProcessing = (%v, %v), want an empty non-nil slice", got, err)
+	}
+}
