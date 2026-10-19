@@ -42,3 +42,11 @@ type Chunk struct {
 	Index      int       `json:"index"`
 	Content    string    `json:"content"`
 }
+
+// RetrievedChunk is one search result: a chunk plus how well it matched.
+type RetrievedChunk struct {
+	Index        int     // the chunk's position in its document (chunks.chunk_index)
+	Content      string
+	Score        float64 // higher is better; comparable only within one search
+	MatchedTerms int     // how many of the question's terms the chunk contains (0 = not measured)
+}
