@@ -1,0 +1,18 @@
+HTTP/1.1 401 Unauthorized
+Date: Fri, 16 Oct 2026 18:40:51 GMT
+Content-Type: application/json
+Content-Length: 96
+Connection: keep-alive
+Cache-Control: private, max-age=0, no-store, no-cache, must-revalidate
+Server: cloudflare
+vary: Origin
+x-groq-region: dls
+x-request-id: req_01m5308n29e25rv3brgz1d8w8p
+set-cookie: __cf_bm=QJLBH0Ph3HZHK.miw0Dwnxnn5kGFN98w_nNFJVt8xeU-1792176051.1425285-1.0.1.1-qTwl5P6boaqZYk4kdkHhYrhJ_6dS5hs5VZ2mEMaq1ooAssU2beCKvR_jUhJzafgWgD0fxi6iGn8g9R3J27nbvYWEpgzZwXw.XwgMh1ATyMsHx.Qx2XhptBhqprvGZAbx; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Fri, 16 Oct 2026 19:10:51 GMT
+via: 1.1 google
+alt-svc: h3=":443"; ma=86400
+Strict-Transport-Security: max-age=15552000
+cf-cache-status: DYNAMIC
+CF-RAY: a4b931bfacaa9cba-DAC
+
+{"error":{"message":"Invalid API Key","type":"invalid_request_error","code":"invalid_api_key"}}

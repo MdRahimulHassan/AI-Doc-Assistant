@@ -1,0 +1,18 @@
+HTTP/1.1 404 Not Found
+Date: Fri, 16 Oct 2026 18:40:36 GMT
+Content-Type: application/json
+Content-Length: 154
+Connection: keep-alive
+Cache-Control: private, max-age=0, no-store, no-cache, must-revalidate
+Server: cloudflare
+vary: Origin
+x-groq-region: bom
+x-request-id: req_01m53086d8e23v17f58gj8k3xj
+via: 1.1 google
+cf-cache-status: DYNAMIC
+set-cookie: __cf_bm=cAaacTyfWfgShUOQ059sCJfzATFtaRY53u2DPoYRpzs-1792176036.2401922-1.0.1.1-RjlSu0J94UB.8L8eLlIWr9VhrTe9UReXuiDsCUU0M_9UJvBbVxxxiFpldQ3EXpVYCQZI4wbA3sX_txe_x1OqFSRwGnW_aWdyvImrCwU2.loczd2aakvun.xpqLX12Rrp; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Fri, 16 Oct 2026 19:10:36 GMT
+Strict-Transport-Security: max-age=15552000
+CF-RAY: a4b931627cfd5853-DAC
+alt-svc: h3=":443"; ma=86400
+
+{"error":{"message":"The model `no/such-model` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}

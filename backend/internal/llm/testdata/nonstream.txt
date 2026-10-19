@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Date: Fri, 16 Oct 2026 18:40:03 GMT
+Content-Type: application/json
+Content-Length: 646
+Connection: keep-alive
+Cache-Control: private, max-age=0, no-store, no-cache, must-revalidate
+Server: cloudflare
+vary: Origin
+x-groq-region: bom
+x-ratelimit-limit-requests: 1000
+x-ratelimit-limit-tokens: 8000
+x-ratelimit-remaining-requests: 999
+x-ratelimit-remaining-tokens: 7623
+x-ratelimit-reset-requests: 1m26.4s
+x-ratelimit-reset-tokens: 2.827s
+x-request-id: req_01m530769tetjt9ev16bpn7z3e
+via: 1.1 google
+cf-cache-status: DYNAMIC
+set-cookie: __cf_bm=sFTIQs3xyxaTbBUp.73HJsdhuBgap2_bLht4gTHwzlI-1792176003.3642845-1.0.1.1-R092wIYGGPuNZcvAEbQqRPCqxSkwwRN2yS3dgno6byuv_BiPMgEFxuZqEU4LdnwqEvlKwOqvmN.Txyw5AV.UH6A7u_8Fq8NZ5nhNuOU0I5LUba0fcKB_29CsyCc26MBK; HttpOnly; SameSite=None; Secure; Path=/; Domain=groq.com; Expires=Fri, 16 Oct 2026 19:10:03 GMT
+Strict-Transport-Security: max-age=15552000
+CF-RAY: a4b9309508049ec8-DAC
+alt-svc: h3=":443"; ma=86400
+
+{"id":"chatcmpl-c26d918e-6fb1-4cdc-b1a1-bf58196bba62","object":"chat.completion","created":1792176003,"model":"openai/gpt-oss-20b","choices":[{"index":0,"message":{"role":"assistant","content":"Hello there, how are you?"},"logprobs":null,"finish_reason":"stop"}],"usage":{"queue_time":0.310268531,"prompt_tokens":77,"prompt_time":0.00427152,"completion_tokens":63,"completion_time":0.065687724,"total_tokens":140,"total_time":0.069959244,"completion_tokens_details":{"reasoning_tokens":47}},"usage_breakdown":null,"system_fingerprint":"fp_e594c51153","x_groq":{"id":"req_01m530769tetjt9ev16bpn7z3e","seed":1384686371},"service_tier":"on_demand"}
