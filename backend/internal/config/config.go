@@ -18,10 +18,12 @@ import (
 
 const minJWTSecretLen = 32
 
-// promptOverheadTokens is the room reserved for the system prompt, the
-// question and any conversation history. It is used to check that ONE question
-// can fit in the per-minute token budget at all.
-const promptOverheadTokens = 500
+// PromptOverheadTokens is the room reserved, on top of the passages and the
+// answer, for everything else in one question's prompt: the system prompt
+// (~350 tokens), the question (up to ASK_MAX_QUESTION_CHARS), a little history
+// (up to ~300) and the chat format. A test in the service package proves the
+// worst case fits; raise this if that test ever says it does not.
+const PromptOverheadTokens = 1500
 
 // A model id such as "openai/gpt-oss-120b". The strict character set keeps
 // anything surprising out of the JSON body and the logs.
@@ -162,11 +164,11 @@ func Load() (*Config, error) {
 
 	// If one question can never fit in the per-minute budget, the pacer in
 	// front of Groq would wait forever. Catch that at startup instead.
-	if need := cfg.AskContextTokens + cfg.AskMaxOutputTokens + promptOverheadTokens; need > cfg.GroqTPMBudget {
+	if need := cfg.AskContextTokens + cfg.AskMaxOutputTokens + PromptOverheadTokens; need > cfg.GroqTPMBudget {
 		errs = append(errs, fmt.Errorf(
 			"one question needs about %d tokens (ASK_CONTEXT_TOKENS %d + ASK_MAX_OUTPUT_TOKENS %d + %d for the prompt) "+
 				"but GROQ_TPM_BUDGET is only %d: lower ASK_CONTEXT_TOKENS or raise GROQ_TPM_BUDGET",
-			need, cfg.AskContextTokens, cfg.AskMaxOutputTokens, promptOverheadTokens, cfg.GroqTPMBudget))
+			need, cfg.AskContextTokens, cfg.AskMaxOutputTokens, PromptOverheadTokens, cfg.GroqTPMBudget))
 	}
 
 	if len(errs) > 0 {
