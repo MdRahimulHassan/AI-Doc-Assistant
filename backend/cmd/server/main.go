@@ -20,6 +20,7 @@ import (
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/router"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/storage"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/llm"
 )
 
 const (
@@ -133,6 +134,49 @@ func run() error {
 
 	docService := service.NewDocumentService(docRepo, files, queue, cfg.MaxUploadBytes)
 
+	
+
+	// 7b. Questions and answers.
+	chunkRepo := repository.NewChunkRepository(pool)
+	retrieval, err := service.NewRetrievalService(chunkRepo, cfg.AskTopK)
+	if err != nil {
+		return fmt.Errorf("retrieval service: %w", err)
+	}
+	conversations := service.NewConversationService(repository.NewConversationRepository(pool))
+
+	// The chat client exists only if there is an API key. Assigning a nil
+	// *llm.Client to the interface would make it non-nil, so it is assigned
+	// only inside the if.
+	var chat service.ChatClient
+	if cfg.LLMEnabled() {
+		client, err := llm.New(llm.Config{APIKey: cfg.GroqAPIKey, TPMBudget: cfg.GroqTPMBudget})
+		if err != nil {
+			return fmt.Errorf("groq client: %w", err)
+		}
+		defer client.Close()
+		chat = client
+	}
+
+	// Cancelled when the server starts to stop, so open answer streams end at
+	// once (and are saved as partial) instead of holding up the shutdown.
+	asksCtx, stopAsks := context.WithCancel(context.Background())
+	defer stopAsks()
+
+	askService, err := service.NewAskService(service.AskDeps{
+		Documents:     docService,
+		Retriever:     retrieval,
+		Conversations: conversations,
+		LLM:           chat,
+		Shutdown:      asksCtx,
+	}, service.AskSettings{
+		Model:            cfg.GroqModel,
+		MaxOutputTokens:  cfg.AskMaxOutputTokens,
+		ContextBudget:    cfg.AskContextTokens,
+		MaxQuestionChars: cfg.AskMaxQuestionChars,
+	})
+	if err != nil {
+		return fmt.Errorf("ask service: %w", err)
+	}
 	// 7. Router and server
 	r := router.New(router.Deps{
 		DB:             pool,
@@ -141,6 +185,8 @@ func run() error {
 		Tokens:         tokens,
 		CORSOrigins:    cfg.CORSOrigins,
 		MaxUploadBytes: cfg.MaxUploadBytes,
+		Asker:          askService,
+		Messages:       conversations,
 	})
 
 	srv := &http.Server{
@@ -169,7 +215,7 @@ func run() error {
 		log.Println("shutdown signal received")
 	}
 	stop() // a second Ctrl+C now force-kills instead of being swallowed
-
+	stopAsks() // running answers end now; they are saved as partial and the client is told
 	// 9. Shutdown, in this order:
 	//    1) HTTP server: no new uploads; requests in flight finish.
 	//    2) Ingestion queue: running jobs finish; queued jobs are not started and

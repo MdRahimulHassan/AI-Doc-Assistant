@@ -551,9 +551,9 @@ func TestCitations(t *testing.T) {
 
 func TestStripCitations(t *testing.T) {
 	tests := map[string]string{
-		"The answer is 83 [P1].":              "The answer is 83 .",
-		"See [P1][P2, P3] and [ P4 ; P5 ].":    "See and .",
-		"A real reference [7] stays [P2].":     "A real reference [7] stays .",
+		"The answer is 83 [P1].":              "The answer is 83.",
+		"See [P1][P2, P3] and [ P4 ; P5 ].":    "See and.",
+		"A real reference [7] stays [P2].":     "A real reference [7] stays.",
 		"Line one.\n\nLine   two [P1]":         "Line one. Line two",
 		"":                                     "",
 	}

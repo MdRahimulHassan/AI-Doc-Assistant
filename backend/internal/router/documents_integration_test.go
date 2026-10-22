@@ -36,6 +36,7 @@ type stack struct {
 	uploads string // the upload directory
 	alice   string // bearer tokens for two different users
 	bob     string
+	chat    *scriptedChat
 }
 
 func newStack(t *testing.T, maxUpload int64) *stack { return newStackWith(t, maxUpload, 50, true) }
@@ -110,15 +111,34 @@ func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers
 	t.Cleanup(func() { _ = queue.Shutdown(10 * time.Second) })
 
 	docs := service.NewDocumentService(docRepo, files, queue, maxUpload)
+	chat := &scriptedChat{pieces: []string{"The zebrafish is a small freshwater fish ", "[P1]."}}
+	convSvc := service.NewConversationService(repository.NewConversationRepository(pool))
+	retrieval, err := service.NewRetrievalService(repository.NewChunkRepository(pool), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	askSvc, err := service.NewAskService(service.AskDeps{
+		Documents: docs, Retriever: retrieval, Conversations: convSvc, LLM: chat,
+	}, service.AskSettings{Model: "test-model", MaxOutputTokens: 500, ContextBudget: 3000, MaxQuestionChars: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &stack{
 		handler: router.New(router.Deps{
-			DB: pool, Auth: authSvc, Documents: docs, Tokens: tokens,
-			CORSOrigins: []string{"http://localhost:5173"}, MaxUploadBytes: maxUpload,
+			DB: pool, 
+			Auth: authSvc, 
+			Documents: docs, 
+			Tokens: tokens,
+			CORSOrigins: []string{"http://localhost:5173"}, 
+			MaxUploadBytes: maxUpload,
+			Asker: askSvc, 
+			Messages: convSvc,
 		}),
 		pool:    pool,
 		uploads: uploads,
 		alice:   tokenFor("alice@example.com"),
 		bob:     tokenFor("bob@example.com"),
+		chat: chat,
 	}
 }
 

@@ -330,7 +330,13 @@ var (
 
 // StripCitations removes [P1]-style citations and tidies the whitespace.
 func StripCitations(s string) string {
-	return strings.Join(strings.Fields(citationGroup.ReplaceAllString(s, "")), " ")
+	s = citationGroup.ReplaceAllString(s, "")
+
+	// Remove spaces before punctuation left behind by citation removal.
+	s = regexp.MustCompile(`\s+([.,;:!?])`).ReplaceAllString(s, "$1")
+
+	// Collapse remaining whitespace, including newlines.
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // Citations lists the passage numbers an answer cites, each once, in order of

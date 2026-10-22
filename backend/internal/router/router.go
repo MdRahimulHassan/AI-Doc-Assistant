@@ -14,6 +14,8 @@ type Deps struct {
 	DB             handler.Pinger
 	Auth           handler.Authenticator
 	Documents      handler.Documents
+	Asker          handler.Asker         // nil disables the ask route (503)
+	Messages       handler.MessageLister
 	Tokens         middleware.TokenParser
 	CORSOrigins    []string
 	MaxUploadBytes int64
@@ -48,6 +50,7 @@ func New(d Deps) *gin.Engine {
 	health := handler.NewHealthHandler(d.DB)
 	authH := handler.NewAuthHandler(d.Auth)
 	docsH := handler.NewDocumentHandler(d.Documents, d.MaxUploadBytes)
+	convH := handler.NewConversationHandler(d.Asker, d.Messages)
 
 	r.GET("/health", health.Check)
 
@@ -67,6 +70,8 @@ func New(d Deps) *gin.Engine {
 	protected.GET("/documents", docsH.List)
 	protected.GET("/documents/:id", docsH.Get)
 	protected.DELETE("/documents/:id", docsH.Delete)
+	protected.POST("/documents/:id/ask", convH.Ask)
+	protected.GET("/documents/:id/messages", convH.Messages)
 
 	return r
 }

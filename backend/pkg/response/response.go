@@ -22,6 +22,14 @@ const (
 	CodeFileTooLarge        = "FILE_TOO_LARGE"
 	CodeUnsupportedFileType = "UNSUPPORTED_FILE_TYPE"
 	CodeNoFile              = "NO_FILE"
+	CodeDocumentNotReady = "DOCUMENT_NOT_READY"
+	CodeAnswerInProgress = "ANSWER_IN_PROGRESS"
+	CodeRateLimited      = "RATE_LIMITED"
+	CodeLLMUnavailable   = "LLM_UNAVAILABLE"
+	CodeLLMBusy          = "LLM_BUSY"
+	CodeLLMTimeout       = "LLM_TIMEOUT"
+	CodeLLMError         = "LLM_ERROR"
+	CodeShuttingDown     = "SERVER_SHUTTING_DOWN"
 )
 
 // Envelope is the one JSON shape every endpoint returns.
