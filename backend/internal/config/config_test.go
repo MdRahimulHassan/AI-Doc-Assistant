@@ -117,7 +117,7 @@ func clearLLMEnv(t *testing.T) {
 		"GROQ_API_KEY", "GROQ_MODEL", "GROQ_SUMMARY_MODEL", "GROQ_TPM_BUDGET",
 		"ASK_TOP_K", "ASK_CONTEXT_TOKENS", "ASK_MAX_OUTPUT_TOKENS", "ASK_MAX_QUESTION_CHARS",
 		"LLM_RATE_PER_MINUTE", "LLM_MAX_CONCURRENT_PER_USER","SUMMARY_GROUP_TOKENS", 
-		"SUMMARY_MAX_OUTPUT_TOKENS", "SUMMARY_MAX_CHUNKS", "SUMMARY_WORKERS",
+		"SUMMARY_MAX_OUTPUT_TOKENS", "SUMMARY_MAX_CHUNKS", "SUMMARY_WORKERS", "AUTH_RATE_PER_MINUTE", "UPLOAD_RATE_PER_MINUTE", "LLM_GLOBAL_CONCURRENCY",
 	} {
 		t.Setenv(k, "")
 	}
@@ -327,5 +327,40 @@ func TestLoad_SummaryCallMustFitTheBudget(t *testing.T) {
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "GROQ_TPM_BUDGET") {
 		t.Fatalf("err = %v, want an error that names GROQ_TPM_BUDGET", err)
+	}
+}
+
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := []int{cfg.AuthRatePerMinute, cfg.UploadRatePerMinute, cfg.LLMGlobalConcurrency, cfg.LLMRatePerMinute, cfg.LLMMaxConcurrentPerUser}
+	want := []int{20, 30, 4, 6, 2}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("default #%d = %d, want %d (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestLoad_RateLimitInvalidValues(t *testing.T) {
+	tests := []struct{ name, key, value string }{
+		{"zero auth rate", "AUTH_RATE_PER_MINUTE", "0"},
+		{"absurd auth rate", "AUTH_RATE_PER_MINUTE", "999999"},
+		{"auth rate not a number", "AUTH_RATE_PER_MINUTE", "fast"},
+		{"zero upload rate", "UPLOAD_RATE_PER_MINUTE", "0"},
+		{"zero global concurrency", "LLM_GLOBAL_CONCURRENCY", "0"},
+		{"huge global concurrency", "LLM_GLOBAL_CONCURRENCY", "1000"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected an error for %s=%s", tc.key, tc.value)
+			}
+		})
 	}
 }

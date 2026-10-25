@@ -9,18 +9,22 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/chunker"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/config"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/database"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/llm"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/middleware"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/parser"
+	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/ratelimit"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/repository"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/router"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/service"
 	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/storage"
-	"github.com/MdRahimulHassan/AI-Doc-Assistant/backend/internal/llm"
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -134,8 +138,6 @@ func run() error {
 
 	docService := service.NewDocumentService(docRepo, files, queue, cfg.MaxUploadBytes)
 
-	
-
 	// 7b. Questions and answers.
 	chunkRepo := repository.NewChunkRepository(pool)
 	retrieval, err := service.NewRetrievalService(chunkRepo, cfg.AskTopK)
@@ -149,7 +151,11 @@ func run() error {
 	// only inside the if.
 	var chat service.ChatClient
 	if cfg.LLMEnabled() {
-		client, err := llm.New(llm.Config{APIKey: cfg.GroqAPIKey, TPMBudget: cfg.GroqTPMBudget})
+		client, err := llm.New(llm.Config{
+			APIKey:        cfg.GroqAPIKey,
+			TPMBudget:     cfg.GroqTPMBudget,
+			MaxConcurrent: cfg.LLMGlobalConcurrency,
+		})
 		if err != nil {
 			return fmt.Errorf("groq client: %w", err)
 		}
@@ -216,6 +222,46 @@ func run() error {
 		slog.Info("recovering summaries left unfinished by an earlier run", "count", len(unfinishedSummaries))
 		summaryQueue.EnqueueAll(appCtx, unfinishedSummaries)
 	}()
+
+	// 7d. Rate limits: in memory, per process. The sweepers forget idle keys and
+	// stop with appCtx.
+	authLimiter, err := ratelimit.NewKeyedLimiter(ratelimit.Config{PerMinute: cfg.AuthRatePerMinute})
+	if err != nil {
+		return fmt.Errorf("auth rate limiter: %w", err)
+	}
+	uploadLimiter, err := ratelimit.NewKeyedLimiter(ratelimit.Config{PerMinute: cfg.UploadRatePerMinute})
+	if err != nil {
+		return fmt.Errorf("upload rate limiter: %w", err)
+	}
+	llmLimiter, err := ratelimit.NewKeyedLimiter(ratelimit.Config{PerMinute: cfg.LLMRatePerMinute})
+	if err != nil {
+		return fmt.Errorf("ai rate limiter: %w", err)
+	}
+	llmSlots, err := ratelimit.NewKeyedSemaphore(cfg.LLMMaxConcurrentPerUser)
+	if err != nil {
+		return fmt.Errorf("ai concurrency limit: %w", err)
+	}
+	var sweepers sync.WaitGroup
+	for _, l := range []*ratelimit.KeyedLimiter{authLimiter, uploadLimiter, llmLimiter} {
+		sweepers.Add(1)
+		go func(l *ratelimit.KeyedLimiter) {
+			defer sweepers.Done()
+			l.Run(appCtx, time.Minute)
+		}(l)
+	}
+	limits := router.Limits{
+		Auth:   []gin.HandlerFunc{middleware.RateLimitByIP(authLimiter)},
+		Upload: []gin.HandlerFunc{middleware.RateLimitByUser(uploadLimiter)},
+		// The concurrency cap comes first: a request refused for having too many
+		// answers running must not use up a token of the rate limit.
+		LLM: []gin.HandlerFunc{middleware.LimitConcurrencyByUser(llmSlots), middleware.RateLimitByUser(llmLimiter)},
+	}
+	slog.Info("rate limits active",
+		"auth_per_min", authLimiter.PerMinute(), "auth_burst", authLimiter.Burst(),
+		"upload_per_min", uploadLimiter.PerMinute(), "upload_burst", uploadLimiter.Burst(),
+		"ai_per_min", llmLimiter.PerMinute(), "ai_burst", llmLimiter.Burst(),
+		"ai_concurrent_per_user", cfg.LLMMaxConcurrentPerUser, "ai_concurrent_global", cfg.LLMGlobalConcurrency)
+
 	// 7. Router and server
 	r := router.New(router.Deps{
 		DB:             pool,
@@ -226,7 +272,8 @@ func run() error {
 		MaxUploadBytes: cfg.MaxUploadBytes,
 		Asker:          askService,
 		Messages:       conversations,
-		Summaries: summarySvc,
+		Summaries:      summarySvc,
+		Limits:         limits,
 	})
 
 	srv := &http.Server{
@@ -254,8 +301,9 @@ func run() error {
 	case <-ctx.Done():
 		log.Println("shutdown signal received")
 	}
-	stop() // a second Ctrl+C now force-kills instead of being swallowed
+	stop()    // a second Ctrl+C now force-kills instead of being swallowed
 	stopAsks() // running answers end now; they are saved as partial and the client is told
+
 	// 9. Shutdown, in this order:
 	//    1) HTTP server: no new uploads; requests in flight finish.
 	//    2) Ingestion queue: running jobs finish; queued jobs are not started and
@@ -287,6 +335,14 @@ func run() error {
 	case <-summaryRecoveryDone:
 	case <-time.After(5 * time.Second):
 		slog.Warn("summary recovery did not stop in time")
+	}
+
+	sweepersDone := make(chan struct{})
+	go func() { sweepers.Wait(); close(sweepersDone) }()
+	select {
+	case <-sweepersDone:
+	case <-time.After(5 * time.Second):
+		slog.Warn("rate limit sweepers did not stop in time")
 	}
 
 	if httpErr != nil {

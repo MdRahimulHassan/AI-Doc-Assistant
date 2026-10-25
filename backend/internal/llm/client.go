@@ -36,6 +36,7 @@ type Config struct {
 	MaxRetryWait time.Duration // longest wait for an interactive call, default 20s
 	BackoffBase  time.Duration // first retry wait ceiling, default 500ms
 	BackoffMax   time.Duration // retry wait ceiling, default 8s
+	MaxConcurrent int // model calls running at once, all users together; a stream holds its slot until it ends (default 4)
 
 	RequestTimeout        time.Duration // one non-streaming attempt, default 60s
 	StreamMaxDuration     time.Duration // one streaming attempt, default 5m
@@ -71,6 +72,9 @@ func (c *Config) applyDefaults() {
 	if c.ResponseHeaderTimeout <= 0 {
 		c.ResponseHeaderTimeout = 30 * time.Second
 	}
+	if c.MaxConcurrent <= 0 {
+		c.MaxConcurrent = 4
+	}
 }
 
 // Client talks to Groq. It is safe for concurrent use.
@@ -78,6 +82,7 @@ type Client struct {
 	cfg      Config
 	http     *http.Client
 	pacer    *pacer
+	slots    *slotGate
 	endpoint string
 
 	// Replaceable in tests, so retries need no real waiting.
@@ -129,6 +134,7 @@ func New(cfg Config) (*Client, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		pacer:    newPacer(cfg.TPMBudget),
+		slots:    newSlotGate(cfg.MaxConcurrent),
 		endpoint: base + "/chat/completions",
 		sleep:    sleepContext,
 		jitter:   fullJitter,
@@ -139,6 +145,8 @@ func New(cfg Config) (*Client, error) {
 // Close releases idle connections.
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
+// InFlight is how many model calls hold a slot right now.
+func (c *Client) InFlight() int { return c.slots.inFlight() }
 // ---------------------------------------------------------------------------
 // building a call
 // ---------------------------------------------------------------------------
@@ -258,9 +266,22 @@ func (c *Client) do(ctx context.Context, p call, handle handler) error {
 	}
 }
 
-// attempt makes one try: wait for budget, send, and let the handler read the answer.
+// attempt makes one try: take a slot, wait for budget, send, and let the
+// handler read the answer. The slot is held until the handler is done, so a
+// stream occupies its slot for as long as it lasts, and is freed by the defer on
+// every exit path (an error, a cancellation, even a panic).
 func (c *Client) attempt(ctx context.Context, p call, handle handler) (bool, error) {
-	if err := c.pacer.wait(ctx, p.cost, p.maxWait); err != nil {
+	began := c.now()
+
+	release, err := c.slots.acquire(ctx, p.maxWait)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+
+	// Waiting for a slot and waiting for token budget share ONE allowance.
+	remaining := max(0, p.maxWait-c.now().Sub(began))
+	if err := c.pacer.wait(ctx, p.cost, remaining); err != nil {
 		return false, err
 	}
 

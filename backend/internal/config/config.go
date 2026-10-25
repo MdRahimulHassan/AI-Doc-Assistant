@@ -68,6 +68,10 @@ type Config struct {
 	SummaryMaxOutputTokens int
 	SummaryMaxChunks       int
 	SummaryWorkers         int
+
+	AuthRatePerMinute    int
+	UploadRatePerMinute  int
+	LLMGlobalConcurrency int
 }
 
 // Load reads configuration from the environment (and a .env file if present).
@@ -206,6 +210,11 @@ func Load() (*Config, error) {
 				"but GROQ_TPM_BUDGET is only %d: lower SUMMARY_GROUP_TOKENS or raise GROQ_TPM_BUDGET",
 			need, cfg.SummaryGroupTokens, SummaryPromptOverheadTokens, cfg.SummaryMaxOutputTokens, cfg.GroqTPMBudget))
 	}
+
+	// --- Rate limits ---
+	cfg.AuthRatePerMinute = getInt("AUTH_RATE_PER_MINUTE", 20, 1, 6000, &errs)
+	cfg.UploadRatePerMinute = getInt("UPLOAD_RATE_PER_MINUTE", 30, 1, 6000, &errs)
+	cfg.LLMGlobalConcurrency = getInt("LLM_GLOBAL_CONCURRENCY", 4, 1, 64, &errs)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

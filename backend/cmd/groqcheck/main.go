@@ -40,7 +40,7 @@ func run() int {
 		return 2
 	}
 
-	client, err := llm.New(llm.Config{APIKey: cfg.GroqAPIKey, TPMBudget: cfg.GroqTPMBudget})
+	client, err := llm.New(llm.Config{APIKey: cfg.GroqAPIKey, TPMBudget: cfg.GroqTPMBudget, MaxConcurrent: cfg.LLMGlobalConcurrency})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "client:", err)
 		return 2
