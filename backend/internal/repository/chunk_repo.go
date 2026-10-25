@@ -245,3 +245,30 @@ FROM chunks c, qt
 WHERE c.document_id = $1 AND qt.query IS NOT NULL AND c.tsv @@ qt.query
 ORDER BY score DESC, c.chunk_index
 LIMIT $3`
+
+// ChunkTexts returns the text of a document's chunks in reading order, at most
+// limit of them. System method (no user filter): the caller has already checked
+// ownership. The result is never nil.
+func (r *ChunkRepository) ChunkTexts(ctx context.Context, documentID uuid.UUID, limit int) ([]string, error) {
+	limit = min(max(limit, 1), 10000)
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT content FROM chunks WHERE document_id = $1 ORDER BY chunk_index LIMIT $2`, documentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("chunk texts: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0)
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chunk texts: %w", err)
+	}
+	return out, nil
+}

@@ -24,6 +24,8 @@ type scriptedChat struct {
 	gate     chan struct{} // if set, the stream pauses after the first piece until released or cancelled
 	onStream func()        // called when a stream begins, before any text
 	requests []service.ChatRequest
+	complete      func(ctx context.Context, n int, req service.ChatRequest) (service.ChatResponse, error)
+	completeCalls int
 }
 
 func (c *scriptedChat) configure(f func(*scriptedChat)) {
@@ -44,8 +46,22 @@ func (c *scriptedChat) lastRequest() service.ChatRequest {
 	return c.requests[len(c.requests)-1]
 }
 
-func (c *scriptedChat) Complete(context.Context, service.ChatRequest) (service.ChatResponse, error) {
-	return service.ChatResponse{}, fmt.Errorf("not used")
+func (c *scriptedChat) Complete(ctx context.Context, req service.ChatRequest) (service.ChatResponse, error) {
+	c.mu.Lock()
+	c.completeCalls++
+	n, complete := c.completeCalls, c.complete
+	c.mu.Unlock()
+
+	if complete != nil {
+		return complete(ctx, n, req)
+	}
+	return service.ChatResponse{Content: "A SHORT SUMMARY OF THE DOCUMENT.", FinishReason: "stop", Model: req.Model}, nil
+}
+
+func (c *scriptedChat) summaryCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.completeCalls
 }
 
 func (c *scriptedChat) Stream(ctx context.Context, req service.ChatRequest, onText func(string) error) (service.ChatResponse, error) {

@@ -177,6 +177,45 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("ask service: %w", err)
 	}
+
+	// 7c. Summaries: the same pattern as ingestion (bounded workers, bounded
+	// queue, application-lifetime context, startup recovery).
+	summaryRunner := &service.SummaryRunner{}
+	summaryQueue, err := service.NewJobQueue(appCtx, "summary", summaryRunner, cfg.SummaryWorkers, service.SummaryQueueSize)
+	if err != nil {
+		return fmt.Errorf("summary queue: %w", err)
+	}
+	summarySvc, err := service.NewSummaryService(service.SummaryDeps{
+		Store: docRepo, Chunks: chunkRepo, Jobs: summaryQueue, LLM: chat,
+	}, service.SummarySettings{
+		Model:           cfg.GroqSummaryModel,
+		GroupTokens:     cfg.SummaryGroupTokens,
+		MaxOutputTokens: cfg.SummaryMaxOutputTokens,
+		MaxChunks:       cfg.SummaryMaxChunks,
+	})
+	if err != nil {
+		return fmt.Errorf("summary service: %w", err)
+	}
+	summaryRunner.Bind(summarySvc) // before Start: a worker must never see an unbound runner
+	summaryQueue.Start()
+
+	// Recovery: summaries left 'processing' by an earlier run are written again
+	// (or, with no API key, marked failed so they can be requested later). Every
+	// restart during a long summary spends its tokens again: in development,
+	// avoid restarting while one is running.
+	unfinishedSummaries, err := docRepo.ListSummarizing(context.Background())
+	if err != nil {
+		return fmt.Errorf("list unfinished summaries: %w", err)
+	}
+	summaryRecoveryDone := make(chan struct{})
+	go func() {
+		defer close(summaryRecoveryDone)
+		if len(unfinishedSummaries) == 0 {
+			return
+		}
+		slog.Info("recovering summaries left unfinished by an earlier run", "count", len(unfinishedSummaries))
+		summaryQueue.EnqueueAll(appCtx, unfinishedSummaries)
+	}()
 	// 7. Router and server
 	r := router.New(router.Deps{
 		DB:             pool,
@@ -187,6 +226,7 @@ func run() error {
 		MaxUploadBytes: cfg.MaxUploadBytes,
 		Asker:          askService,
 		Messages:       conversations,
+		Summaries: summarySvc,
 	})
 
 	srv := &http.Server{
@@ -232,11 +272,21 @@ func run() error {
 		slog.Warn("ingestion did not stop cleanly", "error", err)
 	}
 
+	if err := summaryQueue.Shutdown(ingestDrainTimeout); err != nil {
+		slog.Warn("summaries did not stop cleanly", "error", err)
+	}
+
 	stopApp()
 	select {
 	case <-recoveryDone:
 	case <-time.After(5 * time.Second):
 		slog.Warn("startup recovery did not stop in time")
+	}
+
+	select {
+	case <-summaryRecoveryDone:
+	case <-time.After(5 * time.Second):
+		slog.Warn("summary recovery did not stop in time")
 	}
 
 	if httpErr != nil {

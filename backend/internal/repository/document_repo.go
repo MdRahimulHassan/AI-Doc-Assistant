@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,10 +19,9 @@ const (
 	maxListLimit     = 100
 )
 
-// The column list lives in one place so every query and scanDocument agree.
-// It is a constant, never user input: all user input goes through $n parameters.
 const documentColumns = `id, user_id, filename, mime_type, size_bytes, storage_path,
-	status, error_message, chunk_count, created_at, updated_at`
+	status, error_message, chunk_count, created_at, updated_at,
+	summary, summary_status, summary_error, summary_updated_at`
 
 type DocumentRepository struct {
 	pool *pgxpool.Pool
@@ -247,14 +247,172 @@ func (r *DocumentRepository) CompleteIngestion(ctx context.Context, id uuid.UUID
 	})
 }
 
+// documentDest lists the scan targets in the order of documentColumns.
+func documentDest(d *models.Document) []any {
+	return []any{&d.ID, &d.UserID, &d.Filename, &d.MimeType, &d.SizeBytes, &d.StoragePath,
+		&d.Status, &d.ErrorMessage, &d.ChunkCount, &d.CreatedAt, &d.UpdatedAt,
+		&d.Summary, &d.SummaryStatus, &d.SummaryError, &d.SummaryUpdatedAt}
+}
+
 // scanDocument keeps the column order in one place. pgx.Row is satisfied by
 // both QueryRow results and the rows of a Query loop.
 func scanDocument(row pgx.Row) (*models.Document, error) {
 	var d models.Document
-	err := row.Scan(&d.ID, &d.UserID, &d.Filename, &d.MimeType, &d.SizeBytes, &d.StoragePath,
-		&d.Status, &d.ErrorMessage, &d.ChunkCount, &d.CreatedAt, &d.UpdatedAt)
-	if err != nil {
+	if err := row.Scan(documentDest(&d)...); err != nil {
 		return nil, err
 	}
 	return &d, nil
+}
+
+// ---------------------------------------------------------------------------
+// Summaries
+// ---------------------------------------------------------------------------
+
+// StartSummary claims a document for summarizing and returns the state it was in.
+// The claim is one statement: the row is locked (FOR UPDATE), so of several
+// simultaneous requests exactly one wins and the rest are refused.
+//
+// Refusals, checked in this order:
+//
+//	missing, or not the user's        models.ErrNotFound
+//	not ready (still processing...)   *models.DocumentNotReadyError
+//	more than maxChunks chunks        models.ErrDocumentTooLong
+//	a summary is being written        models.ErrSummaryInProgress
+func (r *DocumentRepository) StartSummary(ctx context.Context, userID, id uuid.UUID, maxChunks int) (*models.SummaryStart, error) {
+	const q = `
+		WITH prev AS (
+			SELECT id AS prev_id, summary_status AS prev_status, summary_error AS prev_error
+			FROM documents
+			WHERE id = $1 AND user_id = $2 AND status = $4 AND summary_status <> $5 AND chunk_count <= $3
+			FOR UPDATE
+		)
+		UPDATE documents
+		SET summary_status = $5, summary_error = NULL, updated_at = now()
+		FROM prev
+		WHERE documents.id = prev.prev_id
+		RETURNING ` + documentColumns + `, prev.prev_status, prev.prev_error`
+
+	var d models.Document
+	var prevStatus models.SummaryStatus
+	var prevErr *string
+	dest := append(documentDest(&d), &prevStatus, &prevErr)
+
+	err := r.pool.QueryRow(ctx, q, id, userID, maxChunks, string(models.StatusReady), string(models.SummaryProcessing)).Scan(dest...)
+	switch {
+	case err == nil:
+		return &models.SummaryStart{Document: &d, PreviousStatus: prevStatus, PreviousError: prevErr}, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, fmt.Errorf("start summary: %w", err)
+	}
+
+	// Nothing was updated: find out why.
+	var status models.DocumentStatus
+	var chunkCount int
+	err = r.pool.QueryRow(ctx,
+		`SELECT status, chunk_count FROM documents WHERE id = $1 AND user_id = $2`, id, userID).Scan(&status, &chunkCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, models.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("start summary: %w", err)
+	}
+	switch {
+	case status != models.StatusReady:
+		return nil, &models.DocumentNotReadyError{Status: status}
+	case chunkCount > maxChunks:
+		return nil, models.ErrDocumentTooLong
+	default:
+		return nil, models.ErrSummaryInProgress
+	}
+}
+
+// RevertSummaryStart puts a document back to the state StartSummary returned,
+// when the job could not be queued. It only acts while the summary is still
+// 'processing'. models.ErrNotFound means the document is gone.
+func (r *DocumentRepository) RevertSummaryStart(ctx context.Context, userID, id uuid.UUID, previous models.SummaryStatus, previousError *string) error {
+	const q = `
+		UPDATE documents
+		SET summary_status = $3, summary_error = $4, updated_at = now()
+		WHERE id = $1 AND user_id = $2 AND summary_status = $5`
+
+	tag, err := r.pool.Exec(ctx, q, id, userID, string(previous), previousError, string(models.SummaryProcessing))
+	if err != nil {
+		return fmt.Errorf("revert summary start: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
+
+// GetForSummary loads a document by ID alone, for the summary worker. System
+// method, like GetForIngest: never call it from a handler.
+func (r *DocumentRepository) GetForSummary(ctx context.Context, id uuid.UUID) (*models.Document, error) {
+	return r.GetForIngest(ctx, id)
+}
+
+// CompleteSummary stores the finished summary. It only acts while the summary
+// is 'processing'. models.ErrNotFound means the document was deleted meanwhile
+// (or is no longer being summarized).
+func (r *DocumentRepository) CompleteSummary(ctx context.Context, id uuid.UUID, summary string) error {
+	if strings.TrimSpace(summary) == "" {
+		return errors.New("complete summary: the summary is empty")
+	}
+	const q = `
+		UPDATE documents
+		SET summary = $2, summary_status = $4, summary_error = NULL, summary_updated_at = now(), updated_at = now()
+		WHERE id = $1 AND summary_status = $3`
+
+	tag, err := r.pool.Exec(ctx, q, id, summary, string(models.SummaryProcessing), string(models.SummaryReady))
+	if err != nil {
+		return fmt.Errorf("complete summary: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
+
+// FailSummary records a failure. The message must be a short, safe, fixed
+// string, never a raw err.Error(). An earlier summary, if there was one, stays.
+func (r *DocumentRepository) FailSummary(ctx context.Context, id uuid.UUID, safeMessage string) error {
+	const q = `
+		UPDATE documents
+		SET summary_status = $4, summary_error = $2, updated_at = now()
+		WHERE id = $1 AND summary_status = $3`
+
+	tag, err := r.pool.Exec(ctx, q, id, safeMessage, string(models.SummaryProcessing), string(models.SummaryFailed))
+	if err != nil {
+		return fmt.Errorf("fail summary: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
+
+// ListSummarizing returns the IDs of documents whose summary is still
+// 'processing', oldest first. At startup these are jobs interrupted by a crash
+// or a restart. System method, no user filter.
+func (r *DocumentRepository) ListSummarizing(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id FROM documents WHERE summary_status = $1 ORDER BY created_at ASC, id ASC`,
+		string(models.SummaryProcessing))
+	if err != nil {
+		return nil, fmt.Errorf("list summarizing documents: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan document id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list summarizing documents: %w", err)
+	}
+	return ids, nil
 }

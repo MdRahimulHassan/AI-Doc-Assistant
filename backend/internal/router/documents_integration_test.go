@@ -41,6 +41,7 @@ type stack struct {
 
 func newStack(t *testing.T, maxUpload int64) *stack { return newStackWith(t, maxUpload, 50, true) }
 
+
 func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers bool) *stack {
 	t.Helper()
 
@@ -73,6 +74,7 @@ func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	users := repository.NewUserRepository(pool)
 	tokenFor := func(email string) string {
 		u, err := users.Create(ctx, email, "hash")
@@ -85,6 +87,7 @@ func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers
 		}
 		return tok
 	}
+
 	authSvc, err := service.NewAuthService(users, tokens, bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
@@ -95,52 +98,130 @@ func newStackWith(t *testing.T, maxUpload int64, queueCapacity int, startWorkers
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	docRepo := repository.NewDocumentRepository(pool)
-	ingest := service.NewIngestService(docRepo, files, chunker.Default(), service.DefaultIngestTimeout)
+	ingest := service.NewIngestService(
+		docRepo,
+		files,
+		chunker.Default(),
+		service.DefaultIngestTimeout,
+	)
 
 	// A real queue with real workers. Cleanups run in reverse order, and this one
 	// is registered last, so it runs FIRST: running jobs finish before the
 	// database lock is released and the pool is closed.
-	queue, err := service.NewIngestQueue(context.Background(), ingest, 2, queueCapacity)
+	queue, err := service.NewIngestQueue(
+		context.Background(),
+		ingest,
+		2,
+		queueCapacity,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if startWorkers {
 		queue.Start()
 	}
-	t.Cleanup(func() { _ = queue.Shutdown(10 * time.Second) })
+	t.Cleanup(func() {
+		_ = queue.Shutdown(10 * time.Second)
+	})
 
 	docs := service.NewDocumentService(docRepo, files, queue, maxUpload)
-	chat := &scriptedChat{pieces: []string{"The zebrafish is a small freshwater fish ", "[P1]."}}
-	convSvc := service.NewConversationService(repository.NewConversationRepository(pool))
-	retrieval, err := service.NewRetrievalService(repository.NewChunkRepository(pool), 4)
+	chat := &scriptedChat{
+		pieces: []string{
+			"The zebrafish is a small freshwater fish ",
+			"[P1].",
+		},
+	}
+
+	convSvc := service.NewConversationService(
+		repository.NewConversationRepository(pool),
+	)
+
+	// Reuse the chunk repository for retrieval and summaries.
+	chunkRepo := repository.NewChunkRepository(pool)
+
+	retrieval, err := service.NewRetrievalService(chunkRepo, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	askSvc, err := service.NewAskService(service.AskDeps{
-		Documents: docs, Retriever: retrieval, Conversations: convSvc, LLM: chat,
-	}, service.AskSettings{Model: "test-model", MaxOutputTokens: 500, ContextBudget: 3000, MaxQuestionChars: 1000})
+
+	askSvc, err := service.NewAskService(
+		service.AskDeps{
+			Documents:    docs,
+			Retriever:    retrieval,
+			Conversations: convSvc,
+			LLM:          chat,
+		},
+		service.AskSettings{
+			Model:           "test-model",
+			MaxOutputTokens: 500,
+			ContextBudget:   3000,
+			MaxQuestionChars: 1000,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Summary service and its background job queue.
+	sumRunner := &service.SummaryRunner{}
+	sumQueue, err := service.NewJobQueue(
+		context.Background(),
+		"summary",
+		sumRunner,
+		1,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sumSvc, err := service.NewSummaryService(
+		service.SummaryDeps{
+			Store:  docRepo,
+			Chunks: chunkRepo,
+			Jobs:   sumQueue,
+			LLM:    chat,
+		},
+		service.SummarySettings{
+			Model:           "test-model",
+			GroupTokens:     2500,
+			MaxOutputTokens: 800,
+			MaxChunks:       120,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sumRunner.Bind(sumSvc)
+	sumQueue.Start()
+
+	t.Cleanup(func() {
+		_ = sumQueue.Shutdown(10 * time.Second)
+	})
+
 	return &stack{
 		handler: router.New(router.Deps{
-			DB: pool, 
-			Auth: authSvc, 
-			Documents: docs, 
-			Tokens: tokens,
-			CORSOrigins: []string{"http://localhost:5173"}, 
-			MaxUploadBytes: maxUpload,
-			Asker: askSvc, 
-			Messages: convSvc,
+			DB:             pool,
+			Auth:            authSvc,
+			Documents:       docs,
+			Tokens:          tokens,
+			CORSOrigins:     []string{"http://localhost:5173"},
+			MaxUploadBytes:  maxUpload,
+			Asker:           askSvc,
+			Messages:        convSvc,
+			Summaries:       sumSvc,
 		}),
 		pool:    pool,
 		uploads: uploads,
 		alice:   tokenFor("alice@example.com"),
 		bob:     tokenFor("bob@example.com"),
-		chat: chat,
+		chat:    chat,
 	}
 }
+
 
 type result struct {
 	Code    int

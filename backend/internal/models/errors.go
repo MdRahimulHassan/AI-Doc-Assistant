@@ -12,4 +12,6 @@ var (
 	ErrFileTooLarge = errors.New("file too large")
 	ErrFileNotFound = errors.New("file not found")
 	ErrInvalidPath  = errors.New("invalid storage path")
+	ErrSummaryInProgress = errors.New("a summary is already being written")
+	ErrDocumentTooLong   = errors.New("the document is too long to summarize")
 )

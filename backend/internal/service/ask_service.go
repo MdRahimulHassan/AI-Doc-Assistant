@@ -39,12 +39,8 @@ var (
 	errClientGone = errors.New("the client went away")
 )
 
-// DocumentNotReadyError says why a document cannot be asked about yet.
-type DocumentNotReadyError struct{ Status models.DocumentStatus }
-
-func (e *DocumentNotReadyError) Error() string {
-	return "the document is not ready (" + string(e.Status) + ")"
-}
+// DocumentNotReadyError says why a document cannot be used yet.
+type DocumentNotReadyError = models.DocumentNotReadyError
 
 // RateLimitError is returned when a user is asking too fast. The per-user
 // limiter of Step 9 produces it.

@@ -2,11 +2,10 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
-	"path/filepath"
 )
-
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
@@ -117,7 +116,8 @@ func clearLLMEnv(t *testing.T) {
 	for _, k := range []string{
 		"GROQ_API_KEY", "GROQ_MODEL", "GROQ_SUMMARY_MODEL", "GROQ_TPM_BUDGET",
 		"ASK_TOP_K", "ASK_CONTEXT_TOKENS", "ASK_MAX_OUTPUT_TOKENS", "ASK_MAX_QUESTION_CHARS",
-		"LLM_RATE_PER_MINUTE", "LLM_MAX_CONCURRENT_PER_USER",
+		"LLM_RATE_PER_MINUTE", "LLM_MAX_CONCURRENT_PER_USER","SUMMARY_GROUP_TOKENS", 
+		"SUMMARY_MAX_OUTPUT_TOKENS", "SUMMARY_MAX_CHUNKS", "SUMMARY_WORKERS",
 	} {
 		t.Setenv(k, "")
 	}
@@ -269,5 +269,63 @@ func TestConfig_PrintingNeverLeaksSecrets(t *testing.T) {
 		if strings.Contains(out, secret) {
 			t.Errorf("printing a Config leaked %q: %s", secret, out)
 		}
+	}
+}
+
+func TestLoad_SummaryDefaults(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := []int{cfg.SummaryGroupTokens, cfg.SummaryMaxOutputTokens, cfg.SummaryMaxChunks, cfg.SummaryWorkers}
+	want := []int{2500, 800, 120, 1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("default #%d = %d, want %d (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestLoad_SummaryInvalidValues(t *testing.T) {
+	tests := []struct{ name, key, value string }{
+		{"zero group size", "SUMMARY_GROUP_TOKENS", "0"},
+		{"tiny group size", "SUMMARY_GROUP_TOKENS", "100"},
+		{"zero output limit", "SUMMARY_MAX_OUTPUT_TOKENS", "0"},
+		{"zero chunk cap", "SUMMARY_MAX_CHUNKS", "0"},
+		{"absurd chunk cap", "SUMMARY_MAX_CHUNKS", "100000"},
+		{"zero workers", "SUMMARY_WORKERS", "0"},
+		{"too many workers", "SUMMARY_WORKERS", "99"},
+		{"not a number", "SUMMARY_WORKERS", "two"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected an error for %s=%s", tc.key, tc.value)
+			}
+		})
+	}
+}
+
+func TestLoad_SummaryGroupMustHoldTwoSummaries(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUMMARY_GROUP_TOKENS", "1000") // 2 * (800 + 12) = 1624 is needed
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "SUMMARY_GROUP_TOKENS") {
+		t.Fatalf("err = %v, want an error that names SUMMARY_GROUP_TOKENS", err)
+	}
+}
+
+func TestLoad_SummaryCallMustFitTheBudget(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("GROQ_TPM_BUDGET", "10000")
+	t.Setenv("SUMMARY_GROUP_TOKENS", "9000") // 9000 + 350 + 1600 is more than 10000
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "GROQ_TPM_BUDGET") {
+		t.Fatalf("err = %v, want an error that names GROQ_TPM_BUDGET", err)
 	}
 }

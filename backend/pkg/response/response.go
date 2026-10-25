@@ -30,6 +30,8 @@ const (
 	CodeLLMTimeout       = "LLM_TIMEOUT"
 	CodeLLMError         = "LLM_ERROR"
 	CodeShuttingDown     = "SERVER_SHUTTING_DOWN"
+	CodeSummaryInProgress = "SUMMARY_IN_PROGRESS"
+	CodeDocumentTooLong   = "DOCUMENT_TOO_LONG"
 )
 
 // Envelope is the one JSON shape every endpoint returns.

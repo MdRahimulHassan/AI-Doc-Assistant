@@ -31,6 +31,10 @@ type Document struct {
 	ChunkCount   int            `json:"chunk_count"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
+	Summary          *string       `json:"-"`
+	SummaryStatus    SummaryStatus `json:"-"`
+	SummaryError     *string       `json:"-"`
+	SummaryUpdatedAt *time.Time    `json:"-"`
 }
 
 // Chunk is one searchable piece of a document's text. The retrieval
@@ -49,4 +53,31 @@ type RetrievedChunk struct {
 	Content      string
 	Score        float64 // higher is better; comparable only within one search
 	MatchedTerms int     // how many of the question's terms the chunk contains (0 = not measured)
+}
+
+// SummaryStatus is the state of a document's summary (migration 000005).
+type SummaryStatus string
+
+const (
+	SummaryNone       SummaryStatus = "none"
+	SummaryProcessing SummaryStatus = "processing"
+	SummaryReady      SummaryStatus = "ready"
+	SummaryFailed     SummaryStatus = "failed"
+)
+
+// SummaryStart is the result of claiming a document for summarizing. The
+// previous state is kept so a refused hand-off can put the document back exactly
+// as it was.
+type SummaryStart struct {
+	Document       *Document
+	PreviousStatus SummaryStatus
+	PreviousError  *string
+}
+
+// DocumentNotReadyError says why a document cannot be used yet. It lives here
+// (not in the service package) because the repository returns it too.
+type DocumentNotReadyError struct{ Status DocumentStatus }
+
+func (e *DocumentNotReadyError) Error() string {
+	return "the document is not ready (" + string(e.Status) + ")"
 }

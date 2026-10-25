@@ -25,6 +25,15 @@ const minJWTSecretLen = 32
 // worst case fits; raise this if that test ever says it does not.
 const PromptOverheadTokens = 1500
 
+// The summary job's per-call overheads, in estimated tokens. SummaryItemOverheadTokens
+// is what one text's tags cost inside a prompt; SummaryPromptOverheadTokens is the
+// system prompt plus the message framing. A test in the service package proves the
+// real prompts stay inside it.
+const (
+	SummaryItemOverheadTokens   = 12
+	SummaryPromptOverheadTokens = 350
+)
+
 // A model id such as "openai/gpt-oss-120b". The strict character set keeps
 // anything surprising out of the JSON body and the logs.
 var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$`)
@@ -55,6 +64,10 @@ type Config struct {
 	AskMaxQuestionChars     int
 	LLMRatePerMinute        int
 	LLMMaxConcurrentPerUser int
+	SummaryGroupTokens     int
+	SummaryMaxOutputTokens int
+	SummaryMaxChunks       int
+	SummaryWorkers         int
 }
 
 // Load reads configuration from the environment (and a .env file if present).
@@ -169,6 +182,29 @@ func Load() (*Config, error) {
 			"one question needs about %d tokens (ASK_CONTEXT_TOKENS %d + ASK_MAX_OUTPUT_TOKENS %d + %d for the prompt) "+
 				"but GROQ_TPM_BUDGET is only %d: lower ASK_CONTEXT_TOKENS or raise GROQ_TPM_BUDGET",
 			need, cfg.AskContextTokens, cfg.AskMaxOutputTokens, PromptOverheadTokens, cfg.GroqTPMBudget))
+	}
+
+	// --- Summaries ---
+	cfg.SummaryGroupTokens = getInt("SUMMARY_GROUP_TOKENS", 2500, 500, 100_000, &errs)
+	cfg.SummaryMaxOutputTokens = getInt("SUMMARY_MAX_OUTPUT_TOKENS", 800, 100, 32_000, &errs)
+	cfg.SummaryMaxChunks = getInt("SUMMARY_MAX_CHUNKS", 120, 1, 2000, &errs)
+	cfg.SummaryWorkers = getInt("SUMMARY_WORKERS", 1, 1, 4, &errs)
+
+	// Every layer must shrink the text. That is guaranteed when at least TWO
+	// summaries always fit in one group.
+	if least := 2 * (cfg.SummaryMaxOutputTokens + SummaryItemOverheadTokens); cfg.SummaryGroupTokens < least {
+		errs = append(errs, fmt.Errorf(
+			"SUMMARY_GROUP_TOKENS (%d) must be at least %d, twice (SUMMARY_MAX_OUTPUT_TOKENS %d + %d), "+
+				"so that two summaries always fit in one group",
+			cfg.SummaryGroupTokens, least, cfg.SummaryMaxOutputTokens, SummaryItemOverheadTokens))
+	}
+	// The biggest call, including the retry with double the output limit, must
+	// fit in the per-minute budget, or the pacer could never let it through.
+	if need := cfg.SummaryGroupTokens + SummaryPromptOverheadTokens + 2*cfg.SummaryMaxOutputTokens; need > cfg.GroqTPMBudget {
+		errs = append(errs, fmt.Errorf(
+			"one summary call can need about %d tokens (SUMMARY_GROUP_TOKENS %d + %d for the prompt + twice SUMMARY_MAX_OUTPUT_TOKENS %d) "+
+				"but GROQ_TPM_BUDGET is only %d: lower SUMMARY_GROUP_TOKENS or raise GROQ_TPM_BUDGET",
+			need, cfg.SummaryGroupTokens, SummaryPromptOverheadTokens, cfg.SummaryMaxOutputTokens, cfg.GroqTPMBudget))
 	}
 
 	if len(errs) > 0 {

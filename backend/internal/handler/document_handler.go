@@ -125,6 +125,7 @@ func (h *DocumentHandler) List(c *gin.Context) {
 	out := make([]DocumentResponse, len(docs)) // never nil, so it encodes as [] and not null
 	for i := range docs {
 		out[i] = toDocumentResponse(&docs[i])
+		out[i].Summary = nil // the list shows summary_status only; read a document to get its summary
 	}
 	response.OK(c, gin.H{"documents": out, "limit": limit, "offset": offset})
 }

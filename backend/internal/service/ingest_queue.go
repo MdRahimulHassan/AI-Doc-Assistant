@@ -34,6 +34,7 @@ type IngestQueue struct {
 	runner  IngestRunner
 	jobs    chan uuid.UUID
 	workers int
+	label   string
 
 	// ctx is what jobs run with. It descends from the APPLICATION context
 	// given by main, never from an HTTP request: a request context is
@@ -49,7 +50,7 @@ type IngestQueue struct {
 	running atomic.Int64
 }
 
-func NewIngestQueue(appCtx context.Context, runner IngestRunner, workers, capacity int) (*IngestQueue, error) {
+func NewJobQueue(appCtx context.Context, label string, runner IngestRunner, workers, capacity int) (*IngestQueue, error) {
 	switch {
 	case runner == nil:
 		return nil, fmt.Errorf("ingest queue: a runner is required")
@@ -64,11 +65,18 @@ func NewIngestQueue(appCtx context.Context, runner IngestRunner, workers, capaci
 		runner:  runner,
 		jobs:    make(chan uuid.UUID, capacity),
 		workers: workers,
+		label: label,
 		ctx:     ctx,
 		cancel:  cancel,
 		stop:    make(chan struct{}),
 	}, nil
 }
+
+// NewIngestQueue is the queue for document ingestion.
+func NewIngestQueue(appCtx context.Context, runner IngestRunner, workers, capacity int) (*IngestQueue, error) {
+	return NewJobQueue(appCtx, "ingest", runner, workers, capacity)
+}
+
 
 // Start launches the workers. Calling it again does nothing.
 func (q *IngestQueue) Start() {
@@ -163,12 +171,22 @@ func (q *IngestQueue) run(worker int, id uuid.UUID) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.Error("ingest worker recovered from a panic; the worker keeps running",
-				"worker", worker, "document_id", id, "panic", rec, "stack", string(debug.Stack()))
+				"worker", worker, 
+				"document_id", id, 
+				"panic", rec,
+				"queue", q.label,
+				"stack", string(debug.Stack()))
 		}
 	}()
 
 	slog.Info("ingest job started",
-		"worker", worker, "document_id", id, "running", running, "queued", len(q.jobs))
+		"worker", worker, 
+		"document_id", id, 
+		"running", running, 
+		"queued", len(q.jobs),
+		"queue", q.label,
+	)
+
 	_ = q.runner.Ingest(q.ctx, id)
 }
 
@@ -187,7 +205,10 @@ func (q *IngestQueue) Shutdown(timeout time.Duration) error {
 	q.mu.Unlock()
 	defer q.cancel()
 
-	slog.Info("ingest queue stopping", "running", q.running.Load(), "left_in_queue", len(q.jobs))
+	slog.Info("ingest queue stopping", 
+	"queue", q.label,
+	"running", q.running.Load(), 
+	"left_in_queue", len(q.jobs))
 
 	done := make(chan struct{})
 	go func() {
@@ -208,8 +229,8 @@ func (q *IngestQueue) Shutdown(timeout time.Duration) error {
 	case <-done:
 	case <-time.After(interruptGrace):
 	}
-	return fmt.Errorf("ingest queue: %d job(s) did not finish within %v and were interrupted; they will be retried at the next start",
-		interrupted, timeout)
+	return fmt.Errorf("%s queue: %d job(s) did not finish within %v and were interrupted; they will be retried at the next start",
+		q.label, interrupted, timeout)
 }
 
 // Running is the number of jobs being processed right now.

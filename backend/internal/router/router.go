@@ -19,6 +19,7 @@ type Deps struct {
 	Tokens         middleware.TokenParser
 	CORSOrigins    []string
 	MaxUploadBytes int64
+	Summaries      handler.Summarizer // nil disables the summarize route (503)
 }
 
 func New(d Deps) *gin.Engine {
@@ -51,6 +52,7 @@ func New(d Deps) *gin.Engine {
 	authH := handler.NewAuthHandler(d.Auth)
 	docsH := handler.NewDocumentHandler(d.Documents, d.MaxUploadBytes)
 	convH := handler.NewConversationHandler(d.Asker, d.Messages)
+	sumH := handler.NewSummaryHandler(d.Summaries)
 
 	r.GET("/health", health.Check)
 
@@ -72,6 +74,7 @@ func New(d Deps) *gin.Engine {
 	protected.DELETE("/documents/:id", docsH.Delete)
 	protected.POST("/documents/:id/ask", convH.Ask)
 	protected.GET("/documents/:id/messages", convH.Messages)
+		protected.POST("/documents/:id/summarize", sumH.Summarize)
 
 	return r
 }
