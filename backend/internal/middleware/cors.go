@@ -13,7 +13,7 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
-		ExposeHeaders:    []string{RequestIDHeader}, // lets frontend JS read it
+		ExposeHeaders:    []string{RequestIDHeader, "Retry-After"}, // lets frontend JS read it
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour, // browsers cache the preflight answer
 	})

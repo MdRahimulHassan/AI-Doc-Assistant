@@ -1,0 +1,7 @@
+export { ApiError, ErrorCode, errorMessage, isApiError } from "./errors"
+export { http } from "./client"
+export { authApi } from "./auth"
+export type { Credentials } from "./auth"
+export { documentsApi } from "./documents"
+export { assistantApi } from "./assistant"
+export { clearToken, getToken, setToken, setUnauthorizedHandler } from "./session"

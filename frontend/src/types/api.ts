@@ -68,3 +68,9 @@ export interface MessagePage {
   limit: number
   next_before?: number
 }
+
+export interface DocumentList {
+  documents: Document[]
+  limit: number
+  offset: number
+}
