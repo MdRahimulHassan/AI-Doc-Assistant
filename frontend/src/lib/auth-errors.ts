@@ -1,4 +1,5 @@
 import { ApiError, ErrorCode } from "@/api"
+import { sentence } from "@/lib/text"
 
 export type AuthField = "email" | "password" | "confirmPassword"
 export type FieldErrors = Partial<Record<AuthField, string>>
@@ -6,12 +7,6 @@ export type FieldErrors = Partial<Record<AuthField, string>>
 export interface MappedAuthError {
   fields: FieldErrors
   form?: string
-}
-
-// Server messages are lowercase fragments ("a valid email address is required").
-function sentence(message: string): string {
-  const text = message.charAt(0).toUpperCase() + message.slice(1)
-  return text.endsWith(".") ? text : `${text}.`
 }
 
 export function mapAuthError(error: unknown): MappedAuthError {
