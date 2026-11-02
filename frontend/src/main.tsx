@@ -6,7 +6,6 @@ import "@fontsource-variable/inter"
 import App from "./App"
 import { ThemeProvider } from "./context/ThemeProvider"
 import "./index.css"
-import * as api from "./api"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,9 +16,6 @@ const queryClient = new QueryClient({
   },
 })
 
-if (import.meta.env.DEV) {
-  Object.assign(window, { api }) // temporary: remove once Step 4 is done
-}
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
