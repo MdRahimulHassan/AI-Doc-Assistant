@@ -10,7 +10,7 @@ import {
   timeoutError,
   unknownError,
 } from "./errors"
-import { clearToken, getToken, notifyUnauthorized } from "./session"
+import { getToken, handleRejectedToken } from "./session"
 
 export const client = axios.create({
   baseURL: config.apiUrl,
@@ -39,12 +39,7 @@ function header(headers: unknown, name: string): string | undefined {
  */
 function expireSessionIfNeeded(error: AxiosError, apiError: ApiError): void {
   if (apiError.status !== 401 || apiError.code !== ErrorCode.Unauthorized) return
-  const current = getToken()
-  const sent = error.config?.headers?.get("Authorization")
-  if (current && sent === `Bearer ${current}`) {
-    clearToken()
-    notifyUnauthorized()
-  }
+  handleRejectedToken(error.config?.headers?.get("Authorization"))
 }
 
 function toApiError(error: unknown): ApiError {

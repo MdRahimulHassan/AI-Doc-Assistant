@@ -10,6 +10,7 @@ import DesignPreview from "@/pages/DesignPreview"
 import LoginPage from "@/pages/LoginPage"
 import NotFoundPage from "@/pages/NotFoundPage"
 import RegisterPage from "@/pages/RegisterPage"
+import DocumentPage from "@/pages/DocumentPage"
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
               <Route index element={<DashboardPage />} />
+              <Route path="/documents/:id" element={<DocumentPage />} />
             </Route>
           </Route>
 
@@ -31,6 +33,7 @@ export default function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </AuthGate>
+
       {/* Outside the gate so the "session expired" toast can show while the app is still booting. */}
       <Toaster />
     </AuthProvider>

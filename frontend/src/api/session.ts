@@ -36,3 +36,16 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 export function notifyUnauthorized(): void {
   unauthorizedHandler?.()
 }
+
+/**
+ * Call when the server answered UNAUTHORIZED. It only ends the session if the
+ * rejected request carried the token we still hold, so a late answer to an old
+ * request can't log out a fresh login.
+ */
+export function handleRejectedToken(sentAuthorization: unknown): void {
+  const current = getToken()
+  if (current && sentAuthorization === `Bearer ${current}`) {
+    clearToken()
+    notifyUnauthorized()
+  }
+}
